@@ -3,6 +3,7 @@
 import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
+import bcrypt from 'bcrypt';
 
 dotenv.config();
 
@@ -15,6 +16,36 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
+
+app.post('/api/login', async (req, res) => {
+  const { usuario, contraseña } = req.body;
+
+  if (!usuario || !contraseña) {
+    return res.status(400).json({ error: 'Faltan campos' });
+  }
+
+  try {
+    // Leer usuarios desde variable de entorno
+    const usuarios = JSON.parse(process.env.USUARIOS_JSON || '[]');
+
+    const user = usuarios.find(u => u.usuario === usuario);
+    if (!user) {
+      return res.status(401).json({ error: 'Usuario o contraseña inválidos' });
+    }
+
+    const esValida = await bcrypt.compare(contraseña, user.hash);
+    if (!esValida) {
+      return res.status(401).json({ error: 'Usuario o contraseña inválidos' });
+    }
+
+    res.json({ mensaje: 'Login correcto' });
+
+  } catch (error) {
+    console.error('Error al procesar login:', error);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
 
 // Proxy para inventario EXCEL
 app.get('/api/inventario', async (req, res) => {

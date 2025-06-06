@@ -1,4 +1,4 @@
-// proxy-server/index.js
+// inventario-server/index.js
 
 import dotenv from 'dotenv';
 import express from 'express';
@@ -18,22 +18,31 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
 app.post('/api/login', async (req, res) => {
-  const { usuario, contraseña } = req.body;
+  const { usuario, contrasena } = req.body;
 
-  if (!usuario || !contraseña) {
+  if (!usuario || !contrasena) {
     return res.status(400).json({ error: 'Faltan campos' });
   }
 
   try {
-    // Leer usuarios desde variable de entorno
-    const usuarios = JSON.parse(process.env.USUARIOS_JSON || '[]');
+    // Verifica que USUARIOS_JSON exista y sea válido
+    const usuariosJSON = process.env.USUARIOS_JSON;
+    if (!usuariosJSON) {
+      console.error('USUARIOS_JSON no está definido en variables de entorno');
+      return res.status(500).json({ error: 'Configuración inválida del servidor' });
+    }
 
+    const usuarios = JSON.parse(usuariosJSON);
     const user = usuarios.find(u => u.usuario === usuario);
-    if (!user) {
+
+    console.log('Usuario recibido:', usuario);
+    console.log('Usuario encontrado:', user);
+
+    if (!user || !user.hash) {
       return res.status(401).json({ error: 'Usuario o contraseña inválidos' });
     }
 
-    const esValida = await bcrypt.compare(contraseña, user.hash);
+    const esValida = await bcrypt.compare(contrasena, user.hash);
     if (!esValida) {
       return res.status(401).json({ error: 'Usuario o contraseña inválidos' });
     }
@@ -42,7 +51,7 @@ app.post('/api/login', async (req, res) => {
 
   } catch (error) {
     console.error('Error al procesar login:', error);
-    res.status(500).json({ error: 'Error interno' });
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 

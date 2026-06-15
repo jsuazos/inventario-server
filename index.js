@@ -1,21 +1,42 @@
-// inventario-server/index.js
-
 import dotenv from 'dotenv';
 import express from 'express';
 import cors from 'cors';
 import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+import webpush from 'web-push';
+import * as pushStore from './push-store.js';
 
 dotenv.config();
 
+webpush.setVapidDetails(
+  'mailto:push@inventario-musica.app',
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
+
 const app = express();
 
-// Permitir CORS
 app.use(cors());
-
-// Middleware para parsear JSON
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret';
+
+function authMiddleware(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Token requerido' });
+  }
+
+  try {
+    const token = header.split(' ')[1];
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Token inválido o expirado' });
+  }
+}
 
 app.post('/api/login', async (req, res) => {
   const { usuario, contrasena } = req.body;
@@ -25,7 +46,6 @@ app.post('/api/login', async (req, res) => {
   }
 
   try {
-    // Verifica que USUARIOS_JSON exista y sea válido
     const usuariosJSON = process.env.USUARIOS_JSON;
     if (!usuariosJSON) {
       console.error('USUARIOS_JSON no está definido en variables de entorno');
@@ -34,9 +54,6 @@ app.post('/api/login', async (req, res) => {
 
     const usuarios = JSON.parse(usuariosJSON);
     const user = usuarios.find(u => u.usuario === usuario);
-
-    console.log('Usuario recibido:', usuario);
-    console.log('Usuario encontrado:', user);
 
     if (!user || !user.hash) {
       return res.status(401).json({ error: 'Usuario o contraseña inválidos' });
@@ -47,7 +64,13 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ error: 'Usuario o contraseña inválidos' });
     }
 
-    res.json({ mensaje: 'Login correcto' });
+    const token = jwt.sign(
+      { usuario: user.usuario },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.json({ token, usuario: user.usuario });
 
   } catch (error) {
     console.error('Error al procesar login:', error);
@@ -55,8 +78,10 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+app.post('/api/login/verify', authMiddleware, (req, res) => {
+  res.json({ valido: true, usuario: req.user.usuario });
+});
 
-// Proxy para inventario EXCEL
 app.get('/api/inventario', async (req, res) => {
   const url = `https://script.google.com/macros/s/${process.env.SECRET_TOKEN_INVENTARIO}/exec?path=INVENTARIO&action=read`;
 
@@ -70,7 +95,19 @@ app.get('/api/inventario', async (req, res) => {
   }
 });
 
-// Proxy para Fanart.tv
+app.get('/api/artistas', async (req, res) => {
+  const url = `https://script.google.com/macros/s/${process.env.SECRET_TOKEN_INVENTARIO}/exec?path=ARTISTAS&action=read`;
+
+  try {
+    const response = await fetch(url);
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error('Error al consultar Artistas:', error);
+    res.status(500).json({ error: 'Error al consultar Artistas' });
+  }
+});
+
 app.get('/api/fanart', async (req, res) => {
   const artistMbId = req.query.mbid;
   if (!artistMbId) return res.status(400).json({ error: 'Falta el parámetro mbid' });
@@ -87,7 +124,6 @@ app.get('/api/fanart', async (req, res) => {
   }
 });
 
-// Proxy para Discogs (ya existente)
 app.get('/api/discogs', async (req, res) => {
   const query = req.query.q;
   if (!query) return res.status(400).json({ error: 'Falta el parámetro q' });
@@ -102,6 +138,86 @@ app.get('/api/discogs', async (req, res) => {
     console.error('Error en Discogs:', error);
     res.status(500).json({ error: 'Error al consultar Discogs' });
   }
+});
+
+app.post('/api/inventario', authMiddleware, async (req, res) => {
+  res.status(501).json({ error: 'Funcionalidad no implementada aún' });
+});
+
+app.put('/api/inventario', authMiddleware, async (req, res) => {
+  res.status(501).json({ error: 'Funcionalidad no implementada aún' });
+});
+
+app.delete('/api/inventario', authMiddleware, async (req, res) => {
+  res.status(501).json({ error: 'Funcionalidad no implementada aún' });
+});
+
+// --- Push notifications ---
+
+app.get('/api/push/vapid-public-key', (req, res) => {
+  res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
+});
+
+app.post('/api/push/subscribe', (req, res) => {
+  const { subscription } = req.body;
+  if (!subscription || !subscription.endpoint) {
+    return res.status(400).json({ error: 'Suscripción inválida' });
+  }
+  pushStore.add(subscription);
+  res.json({ ok: true });
+});
+
+app.delete('/api/push/subscribe', (req, res) => {
+  const { endpoint } = req.body;
+  if (!endpoint) {
+    return res.status(400).json({ error: 'Falta endpoint' });
+  }
+  pushStore.remove(endpoint);
+  res.json({ ok: true });
+});
+
+let lastNotifyTime = 0;
+const NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
+
+app.post('/api/push/notify', authMiddleware, async (req, res) => {
+  const { title, body, data } = req.body;
+  const now = Date.now();
+  if (now - lastNotifyTime < NOTIFY_COOLDOWN_MS) {
+    return res.json({ ok: true, skipped: true, reason: 'cooldown' });
+  }
+
+  const payload = JSON.stringify({
+    title: title || 'Inventario Musical',
+    body: body || 'La biblioteca ha sido actualizada',
+    data: data || { url: '/' },
+  });
+
+  const subscriptions = pushStore.getAll();
+  if (subscriptions.length === 0) {
+    return res.json({ ok: true, sent: 0 });
+  }
+
+  lastNotifyTime = now;
+
+  const results = await Promise.allSettled(
+    subscriptions.map(sub =>
+      webpush.sendNotification(sub, payload).catch(err => {
+        if (err.statusCode === 410 || err.statusCode === 404) {
+          pushStore.remove(sub.endpoint);
+        }
+        console.error(`Error sending to ${sub.endpoint}:`, err.message);
+      })
+    )
+  );
+
+  const sent = results.filter(r => r.status === 'fulfilled').length;
+  console.log(`Push broadcast: ${sent}/${subscriptions.length} sent`);
+  res.json({ ok: true, sent });
+});
+
+app.get('/api/push/subscriptions', authMiddleware, (req, res) => {
+  const subs = pushStore.getAll();
+  res.json({ count: subs.length, subscriptions: subs });
 });
 
 app.listen(PORT, () => {

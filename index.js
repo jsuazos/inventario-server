@@ -5,6 +5,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import webpush from 'web-push';
 import * as pushStore from './push-store.js';
+import { start as startBackgroundCheck } from './background-check.js';
 
 dotenv.config();
 
@@ -222,4 +223,5 @@ app.get('/api/push/subscriptions', authMiddleware, (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Servidor proxy corriendo en http://localhost:${PORT}`);
+  startBackgroundCheck();
 });

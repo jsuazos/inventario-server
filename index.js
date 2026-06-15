@@ -180,7 +180,7 @@ app.delete('/api/push/subscribe', (req, res) => {
 let lastNotifyTime = 0;
 const NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
 
-app.post('/api/push/notify', authMiddleware, async (req, res) => {
+app.post('/api/push/notify', async (req, res) => {
   const { title, body, data } = req.body;
   const now = Date.now();
   if (now - lastNotifyTime < NOTIFY_COOLDOWN_MS) {

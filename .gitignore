@@ -25,3 +25,4 @@ dist-ssr
 
 .env
 library-snapshot.json
+push-subscriptions.json

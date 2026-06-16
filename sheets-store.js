@@ -1,26 +1,66 @@
 import { google } from 'googleapis';
+import fs from 'fs';
 
 const SPREADSHEET_ID = process.env.PUSH_SHEET_ID;
 const SHEET_NAME = 'PushSubscriptions';
 
-function getAuth() {
-  const credentials = process.env.GOOGLE_SERVICE_ACCOUNT;
-  if (!credentials) {
-    throw new Error('GOOGLE_SERVICE_ACCOUNT no configurado');
+function getCredentials() {
+  if (process.env.GOOGLE_SERVICE_ACCOUNT_FILE) {
+    const raw = fs.readFileSync(process.env.GOOGLE_SERVICE_ACCOUNT_FILE, 'utf-8');
+    return JSON.parse(raw);
   }
+  if (process.env.GOOGLE_SERVICE_ACCOUNT) {
+    return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
+  }
+  throw new Error('GOOGLE_SERVICE_ACCOUNT o GOOGLE_SERVICE_ACCOUNT_FILE no configurados');
+}
+
+function getAuth() {
   return new google.auth.GoogleAuth({
-    credentials: JSON.parse(credentials),
+    credentials: getCredentials(),
     scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
 }
 
 let sheetsClient = null;
+let sheetEnsured = false;
 
 async function getSheets() {
   if (sheetsClient) return sheetsClient;
   const auth = await getAuth();
   sheetsClient = google.sheets({ version: 'v4', auth });
   return sheetsClient;
+}
+
+async function ensureSheet() {
+  if (sheetEnsured) return;
+  sheetEnsured = true;
+  try {
+    const sheets = await getSheets();
+    const meta = await sheets.spreadsheets.get({
+      spreadsheetId: SPREADSHEET_ID,
+    });
+    const exists = meta.data.sheets.some(s => s.properties.title === SHEET_NAME);
+    if (!exists) {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          requests: [{ addSheet: { properties: { title: SHEET_NAME } } }],
+        },
+      });
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `${SHEET_NAME}!A1:D1`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: {
+          values: [['endpoint', 'p256dh', 'auth', 'created_at']],
+        },
+      });
+      console.log(`Sheet "${SHEET_NAME}" creada automáticamente`);
+    }
+  } catch (err) {
+    console.error('Error asegurando sheet:', err.message);
+  }
 }
 
 function rowsToSubscriptions(rows) {
@@ -40,6 +80,8 @@ export async function getAll() {
     console.warn('PUSH_SHEET_ID no configurado, usando almacenamiento vacío');
     return [];
   }
+
+  await ensureSheet();
 
   try {
     const sheets = await getSheets();

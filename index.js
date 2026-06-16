@@ -221,6 +221,38 @@ app.get('/api/push/subscriptions', authMiddleware, async (req, res) => {
   res.json({ count: subs.length, subscriptions: subs });
 });
 
+app.get('/api/push/check-sheet', async (req, res) => {
+  const result = {
+    config: {
+      pushSheetId: !!process.env.PUSH_SHEET_ID,
+      googleServiceAccount: !!process.env.GOOGLE_SERVICE_ACCOUNT,
+    },
+    sheetStatus: 'unknown',
+    subscriptions: 0,
+    error: null,
+  };
+
+  if (!process.env.PUSH_SHEET_ID) {
+    result.sheetStatus = 'missing PUSH_SHEET_ID';
+    return res.json(result);
+  }
+  if (!process.env.GOOGLE_SERVICE_ACCOUNT) {
+    result.sheetStatus = 'missing GOOGLE_SERVICE_ACCOUNT';
+    return res.json(result);
+  }
+
+  try {
+    const subs = await pushStore.getAll();
+    result.subscriptions = subs.length;
+    result.sheetStatus = 'ok';
+  } catch (err) {
+    result.sheetStatus = 'error';
+    result.error = err.message;
+  }
+
+  res.json(result);
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor proxy corriendo en http://localhost:${PORT}`);
   startBackgroundCheck();

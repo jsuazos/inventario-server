@@ -92,26 +92,20 @@ async function broadcastPush(added, removed) {
   const now = Date.now();
   if (now - lastNotifyTime < NOTIFY_COOLDOWN_MS) return;
 
-  let body = '📀 Biblioteca actualizada\n';
+  const parts = [];
   if (added.length > 0) {
-    body += `\n➕ ${added.length} agregado${added.length !== 1 ? 's' : ''}`;
-    added.slice(0, 3).forEach(item => {
-      body += `\n  • ${item.Artista || '?'} - ${item.Disco || '?'}`;
-    });
-    if (added.length > 3) body += `\n  ... y ${added.length - 3} más`;
+    parts.push(`${added.length} agregado${added.length !== 1 ? 's' : ''}`);
   }
   if (removed.length > 0) {
-    body += `\n\n➖ ${removed.length} eliminado${removed.length !== 1 ? 's' : ''}`;
-    removed.slice(0, 3).forEach(item => {
-      body += `\n  • ${item.Artista || '?'} - ${item.Disco || '?'}`;
-    });
-    if (removed.length > 3) body += `\n  ... y ${removed.length - 3} más`;
+    parts.push(`${removed.length} eliminado${removed.length !== 1 ? 's' : ''}`);
   }
+
+  const body = parts.join(' · ') || 'Hay cambios en la biblioteca';
 
   const payload = JSON.stringify({
     title: '📀 Biblioteca actualizada',
     body,
-    data: { url: '/' },
+    data: { url: './' },
   });
 
   const subscriptions = await pushStore.getAll();

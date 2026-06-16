@@ -190,7 +190,7 @@ app.post('/api/push/notify', async (req, res) => {
   const payload = JSON.stringify({
     title: title || 'Inventario Musical',
     body: body || 'La biblioteca ha sido actualizada',
-    data: data || { url: '/' },
+    data: data || { url: './' },
   });
 
   const subscriptions = await pushStore.getAll();

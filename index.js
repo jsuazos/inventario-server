@@ -226,9 +226,11 @@ app.get('/api/push/check-sheet', async (req, res) => {
     config: {
       pushSheetId: !!process.env.PUSH_SHEET_ID,
       googleServiceAccount: !!process.env.GOOGLE_SERVICE_ACCOUNT,
+      googleServiceAccountFile: !!process.env.GOOGLE_SERVICE_ACCOUNT_FILE,
     },
     sheetStatus: 'unknown',
     subscriptions: 0,
+    details: null,
     error: null,
   };
 
@@ -242,8 +244,9 @@ app.get('/api/push/check-sheet', async (req, res) => {
   }
 
   try {
-    const subs = await pushStore.getAll();
-    result.subscriptions = subs.length;
+    const details = await pushStore.diagnose();
+    result.details = details;
+    result.subscriptions = details.subscriptionsCount || 0;
     result.sheetStatus = 'ok';
   } catch (err) {
     result.sheetStatus = 'error';

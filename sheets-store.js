@@ -34,13 +34,13 @@ async function getSheets() {
 
 async function ensureSheet() {
   if (sheetEnsured) return;
-  sheetEnsured = true;
   try {
+    sheetEnsured = true;
     const sheets = await getSheets();
     const meta = await sheets.spreadsheets.get({
       spreadsheetId: SPREADSHEET_ID,
     });
-    const exists = meta.data.sheets.some(s => s.properties.title === SHEET_NAME);
+    const exists = (meta.data.sheets || []).some(s => s.properties.title === SHEET_NAME);
     if (!exists) {
       await sheets.spreadsheets.batchUpdate({
         spreadsheetId: SPREADSHEET_ID,
@@ -59,8 +59,18 @@ async function ensureSheet() {
       console.log(`Sheet "${SHEET_NAME}" creada automáticamente`);
     }
   } catch (err) {
+    sheetEnsured = false;
     console.error('Error asegurando sheet:', err.message);
   }
+}
+
+async function getRawRows() {
+  const sheets = await getSheets();
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${SHEET_NAME}!A:D`,
+  });
+  return res.data.values || [];
 }
 
 function rowsToSubscriptions(rows) {
@@ -84,12 +94,8 @@ export async function getAll() {
   await ensureSheet();
 
   try {
-    const sheets = await getSheets();
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A:D`,
-    });
-    return rowsToSubscriptions(res.data.values);
+    const rows = await getRawRows();
+    return rowsToSubscriptions(rows);
   } catch (err) {
     console.error('Error leyendo suscripciones de Google Sheets:', err.message);
     return [];
@@ -167,4 +173,34 @@ export async function remove(endpoint) {
     console.error('Error eliminando suscripción de Google Sheets:', err.message);
     return await getAll();
   }
+}
+
+export async function diagnose() {
+  if (!SPREADSHEET_ID) {
+    return {
+      ok: false,
+      reason: 'missing-spreadsheet-id',
+    };
+  }
+
+  await ensureSheet();
+
+  const sheets = await getSheets();
+  const meta = await sheets.spreadsheets.get({
+    spreadsheetId: SPREADSHEET_ID,
+  });
+  const sheetTitles = (meta.data.sheets || []).map(sheet => sheet.properties.title);
+  const rows = await getRawRows();
+
+  return {
+    ok: true,
+    spreadsheetId: SPREADSHEET_ID,
+    sheetName: SHEET_NAME,
+    sheetExists: sheetTitles.includes(SHEET_NAME),
+    sheetTitles,
+    rawRowCount: rows.length,
+    header: rows[0] || null,
+    firstDataRow: rows[1] || null,
+    subscriptionsCount: rowsToSubscriptions(rows).length,
+  };
 }

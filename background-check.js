@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import webpush from 'web-push';
-import * as pushStore from './push-store.js';
+import * as pushStore from './sheets-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SNAPSHOT_PATH = path.join(__dirname, 'library-snapshot.json');
@@ -114,16 +114,16 @@ async function broadcastPush(added, removed) {
     data: { url: '/' },
   });
 
-  const subscriptions = pushStore.getAll();
+  const subscriptions = await pushStore.getAll();
   if (subscriptions.length === 0) return;
 
   lastNotifyTime = now;
 
   const results = await Promise.allSettled(
     subscriptions.map(sub =>
-      webpush.sendNotification(sub, payload).catch(err => {
+      webpush.sendNotification(sub, payload).catch(async err => {
         if (err.statusCode === 410 || err.statusCode === 404) {
-          pushStore.remove(sub.endpoint);
+          await pushStore.remove(sub.endpoint);
         }
       })
     )

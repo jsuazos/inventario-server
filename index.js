@@ -4,7 +4,7 @@ import cors from 'cors';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import webpush from 'web-push';
-import * as pushStore from './push-store.js';
+import * as pushStore from './sheets-store.js';
 import { start as startBackgroundCheck } from './background-check.js';
 
 dotenv.config();
@@ -159,21 +159,21 @@ app.get('/api/push/vapid-public-key', (req, res) => {
   res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
 });
 
-app.post('/api/push/subscribe', (req, res) => {
+app.post('/api/push/subscribe', async (req, res) => {
   const { subscription } = req.body;
   if (!subscription || !subscription.endpoint) {
     return res.status(400).json({ error: 'Suscripción inválida' });
   }
-  pushStore.add(subscription);
+  await pushStore.add(subscription);
   res.json({ ok: true });
 });
 
-app.delete('/api/push/subscribe', (req, res) => {
+app.delete('/api/push/subscribe', async (req, res) => {
   const { endpoint } = req.body;
   if (!endpoint) {
     return res.status(400).json({ error: 'Falta endpoint' });
   }
-  pushStore.remove(endpoint);
+  await pushStore.remove(endpoint);
   res.json({ ok: true });
 });
 
@@ -193,7 +193,7 @@ app.post('/api/push/notify', async (req, res) => {
     data: data || { url: '/' },
   });
 
-  const subscriptions = pushStore.getAll();
+  const subscriptions = await pushStore.getAll();
   if (subscriptions.length === 0) {
     return res.json({ ok: true, sent: 0 });
   }
@@ -202,9 +202,9 @@ app.post('/api/push/notify', async (req, res) => {
 
   const results = await Promise.allSettled(
     subscriptions.map(sub =>
-      webpush.sendNotification(sub, payload).catch(err => {
+      webpush.sendNotification(sub, payload).catch(async err => {
         if (err.statusCode === 410 || err.statusCode === 404) {
-          pushStore.remove(sub.endpoint);
+          await pushStore.remove(sub.endpoint);
         }
         console.error(`Error sending to ${sub.endpoint}:`, err.message);
       })
@@ -216,8 +216,8 @@ app.post('/api/push/notify', async (req, res) => {
   res.json({ ok: true, sent });
 });
 
-app.get('/api/push/subscriptions', authMiddleware, (req, res) => {
-  const subs = pushStore.getAll();
+app.get('/api/push/subscriptions', authMiddleware, async (req, res) => {
+  const subs = await pushStore.getAll();
   res.json({ count: subs.length, subscriptions: subs });
 });
 

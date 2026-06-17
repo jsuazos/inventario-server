@@ -23,6 +23,10 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret';
 
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, service: 'inventario-server', timestamp: new Date().toISOString() });
+});
+
 function authMiddleware(req, res, next) {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {

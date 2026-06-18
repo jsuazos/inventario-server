@@ -4,10 +4,14 @@ import cors from 'cors';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import webpush from 'web-push';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import * as pushStore from './sheets-store.js';
 import { start as startBackgroundCheck } from './background-check.js';
 
-dotenv.config();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 webpush.setVapidDetails(
   'mailto:push@inventario-musica.app',
@@ -22,10 +26,115 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret';
+const INVENTARIO_CACHE_TTL_MS = parseInt(process.env.INVENTARIO_CACHE_TTL_MS || '300000', 10);
+const PUBLIC_INVENTARIO_RATE_LIMIT = parseInt(process.env.PUBLIC_INVENTARIO_RATE_LIMIT || '60', 10);
+const PUBLIC_INVENTARIO_RATE_WINDOW_MS = parseInt(process.env.PUBLIC_INVENTARIO_RATE_WINDOW_MS || '60000', 10);
+const ALLOWED_PUBLIC_ORIGINS = (process.env.ALLOWED_PUBLIC_ORIGINS || [
+  'https://jsuazo.github.io',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173'
+].join(',')).split(',').map(origin => origin.trim()).filter(Boolean);
+
+const publicInventoryRateMap = new Map();
+
+let inventarioCache = {
+  fetchedAt: 0,
+  rawData: null,
+  publicData: null,
+};
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'inventario-server', timestamp: new Date().toISOString() });
 });
+
+function getInventarioUrl() {
+  return `https://script.google.com/macros/s/${process.env.SECRET_TOKEN_INVENTARIO}/exec?path=INVENTARIO&action=read`;
+}
+
+function normalizeInventarioItem(item) {
+  return {
+    ID: item.ID || '',
+    Artista: item.Artista || '',
+    Disco: item.Disco || '',
+    Año: item.Año || '',
+    Genero: item.Genero || '',
+    Tipo: item.Tipo || '',
+    Recibido: item.Recibido || '',
+    img: item.img || '',
+    imgFULL: item.imgFULL || '',
+    Visible: item.Visible || '',
+    Orden: item.Orden || '',
+    Origen: item.Origen || '',
+    OrigenISO: item.OrigenISO || '',
+  };
+}
+
+function sortInventario(items) {
+  return [...items].sort((a, b) => {
+    const claveA = `${a.Artista || ''} ${a.Año || ''} ${a.Disco || ''} ${a.Recibido || ''}`.toLowerCase();
+    const claveB = `${b.Artista || ''} ${b.Año || ''} ${b.Disco || ''} ${b.Recibido || ''}`.toLowerCase();
+    return claveA.localeCompare(claveB);
+  });
+}
+
+function buildPublicInventario(rawItems) {
+  return sortInventario(
+    rawItems
+      .filter(item => item.Visible === 'SI')
+      .map(normalizeInventarioItem)
+  );
+}
+
+async function fetchInventarioFromSource() {
+  const response = await fetch(getInventarioUrl());
+  const data = await response.json();
+  return Array.isArray(data.data) ? data.data : [];
+}
+
+async function getInventarioData({ forceRefresh = false } = {}) {
+  const now = Date.now();
+  if (!forceRefresh && inventarioCache.rawData && now - inventarioCache.fetchedAt < INVENTARIO_CACHE_TTL_MS) {
+    return inventarioCache;
+  }
+
+  const rawData = await fetchInventarioFromSource();
+  inventarioCache = {
+    fetchedAt: now,
+    rawData,
+    publicData: buildPublicInventario(rawData),
+  };
+
+  return inventarioCache;
+}
+
+function originAllowed(value = '') {
+  return ALLOWED_PUBLIC_ORIGINS.some(origin => value.startsWith(origin));
+}
+
+function publicInventarioAccessMiddleware(req, res, next) {
+  const origin = req.get('origin') || '';
+  const referer = req.get('referer') || '';
+
+  if (!originAllowed(origin) && !originAllowed(referer)) {
+    return res.status(403).json({ error: 'Acceso no permitido' });
+  }
+
+  const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+  const now = Date.now();
+  const current = publicInventoryRateMap.get(ip);
+
+  if (!current || now - current.startedAt > PUBLIC_INVENTARIO_RATE_WINDOW_MS) {
+    publicInventoryRateMap.set(ip, { count: 1, startedAt: now });
+    return next();
+  }
+
+  if (current.count >= PUBLIC_INVENTARIO_RATE_LIMIT) {
+    return res.status(429).json({ error: 'Demasiadas solicitudes' });
+  }
+
+  current.count += 1;
+  next();
+}
 
 function authMiddleware(req, res, next) {
   const header = req.headers.authorization;
@@ -87,16 +196,38 @@ app.post('/api/login/verify', authMiddleware, (req, res) => {
   res.json({ valido: true, usuario: req.user.usuario });
 });
 
-app.get('/api/inventario', async (req, res) => {
-  const url = `https://script.google.com/macros/s/${process.env.SECRET_TOKEN_INVENTARIO}/exec?path=INVENTARIO&action=read`;
-
+app.get('/api/inventario-public', publicInventarioAccessMiddleware, async (req, res) => {
   try {
-    const response = await fetch(url);
-    const data = await response.json();
-    res.json(data);
+    const { publicData, fetchedAt } = await getInventarioData();
+    res.set('Cache-Control', 'private, max-age=60');
+    res.json({
+      data: publicData,
+      meta: {
+        cached: true,
+        fetchedAt: new Date(fetchedAt).toISOString(),
+        count: publicData.length,
+      },
+    });
   } catch (error) {
-    console.error('Error al consultar Inventario:', error);
-    res.status(500).json({ error: 'Error al consultar Inventario' });
+    console.error('Error al consultar Inventario público:', error);
+    res.status(500).json({ error: 'Error al consultar Inventario público' });
+  }
+});
+
+app.get('/api/inventario', authMiddleware, async (req, res) => {
+  try {
+    const { rawData, fetchedAt } = await getInventarioData();
+    res.json({
+      data: rawData,
+      meta: {
+        cached: true,
+        fetchedAt: new Date(fetchedAt).toISOString(),
+        count: rawData.length,
+      },
+    });
+  } catch (error) {
+    console.error('Error al consultar Inventario privado:', error);
+    res.status(500).json({ error: 'Error al consultar Inventario privado' });
   }
 });
 

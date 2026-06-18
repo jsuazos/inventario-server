@@ -7,17 +7,13 @@ import webpush from 'web-push';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import * as pushStore from './sheets-store.js';
+import { getInventarioData } from './inventory-service.js';
+import { createPayload, sendPushBroadcast } from './push-notification-service.js';
 import { start as startBackgroundCheck } from './background-check.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 dotenv.config({ path: path.join(__dirname, '.env') });
-
-webpush.setVapidDetails(
-  'mailto:push@inventario-musica.app',
-  process.env.VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-);
 
 const app = express();
 
@@ -25,8 +21,6 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret';
-const INVENTARIO_CACHE_TTL_MS = parseInt(process.env.INVENTARIO_CACHE_TTL_MS || '300000', 10);
 const PUBLIC_INVENTARIO_RATE_LIMIT = parseInt(process.env.PUBLIC_INVENTARIO_RATE_LIMIT || '60', 10);
 const PUBLIC_INVENTARIO_RATE_WINDOW_MS = parseInt(process.env.PUBLIC_INVENTARIO_RATE_WINDOW_MS || '60000', 10);
 const ALLOWED_PUBLIC_ORIGINS = (process.env.ALLOWED_PUBLIC_ORIGINS || [
@@ -37,78 +31,41 @@ const ALLOWED_PUBLIC_ORIGINS = (process.env.ALLOWED_PUBLIC_ORIGINS || [
 
 const publicInventoryRateMap = new Map();
 
-let inventarioCache = {
-  fetchedAt: 0,
-  rawData: null,
-  publicData: null,
-};
+const REQUIRED_ENV_VARS = [
+  'JWT_SECRET',
+  'SECRET_TOKEN_INVENTARIO',
+  'VAPID_PUBLIC_KEY',
+  'VAPID_PRIVATE_KEY'
+];
+
+for (const envVar of REQUIRED_ENV_VARS) {
+  if (!process.env[envVar]) {
+    throw new Error(`Falta variable de entorno requerida: ${envVar}`);
+  }
+}
+
+const JWT_SECRET = process.env.JWT_SECRET;
+
+webpush.setVapidDetails(
+  'mailto:push@inventario-musica.app',
+  process.env.VAPID_PUBLIC_KEY,
+  process.env.VAPID_PRIVATE_KEY
+);
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'inventario-server', timestamp: new Date().toISOString() });
 });
 
-function getInventarioUrl() {
-  return `https://script.google.com/macros/s/${process.env.SECRET_TOKEN_INVENTARIO}/exec?path=INVENTARIO&action=read`;
-}
-
-function normalizeInventarioItem(item) {
-  return {
-    ID: item.ID || '',
-    Artista: item.Artista || '',
-    Disco: item.Disco || '',
-    Año: item.Año || '',
-    Genero: item.Genero || '',
-    Tipo: item.Tipo || '',
-    Recibido: item.Recibido || '',
-    img: item.img || '',
-    imgFULL: item.imgFULL || '',
-    Visible: item.Visible || '',
-    Orden: item.Orden || '',
-    Origen: item.Origen || '',
-    OrigenISO: item.OrigenISO || '',
-  };
-}
-
-function sortInventario(items) {
-  return [...items].sort((a, b) => {
-    const claveA = `${a.Artista || ''} ${a.Año || ''} ${a.Disco || ''} ${a.Recibido || ''}`.toLowerCase();
-    const claveB = `${b.Artista || ''} ${b.Año || ''} ${b.Disco || ''} ${b.Recibido || ''}`.toLowerCase();
-    return claveA.localeCompare(claveB);
-  });
-}
-
-function buildPublicInventario(rawItems) {
-  return sortInventario(
-    rawItems
-      .filter(item => item.Visible === 'SI')
-      .map(normalizeInventarioItem)
-  );
-}
-
-async function fetchInventarioFromSource() {
-  const response = await fetch(getInventarioUrl());
-  const data = await response.json();
-  return Array.isArray(data.data) ? data.data : [];
-}
-
-async function getInventarioData({ forceRefresh = false } = {}) {
-  const now = Date.now();
-  if (!forceRefresh && inventarioCache.rawData && now - inventarioCache.fetchedAt < INVENTARIO_CACHE_TTL_MS) {
-    return inventarioCache;
+function originAllowed(value = '') {
+  if (!value) {
+    return false;
   }
 
-  const rawData = await fetchInventarioFromSource();
-  inventarioCache = {
-    fetchedAt: now,
-    rawData,
-    publicData: buildPublicInventario(rawData),
-  };
-
-  return inventarioCache;
-}
-
-function originAllowed(value = '') {
-  return ALLOWED_PUBLIC_ORIGINS.some(origin => value.startsWith(origin));
+  try {
+    return ALLOWED_PUBLIC_ORIGINS.includes(new URL(value).origin);
+  } catch {
+    return false;
+  }
 }
 
 function publicInventarioAccessMiddleware(req, res, next) {
@@ -322,33 +279,31 @@ app.post('/api/push/notify', async (req, res) => {
     return res.json({ ok: true, skipped: true, reason: 'cooldown' });
   }
 
-  const payload = JSON.stringify({
-    title: title || 'Inventario Musical',
-    body: body || 'La biblioteca ha sido actualizada',
-    data: data || { url: './' },
-  });
+  const payload = createPayload({ title, body, data });
 
   const subscriptions = await pushStore.getAll();
   if (subscriptions.length === 0) {
     return res.json({ ok: true, sent: 0 });
   }
 
-  lastNotifyTime = now;
-
-  const results = await Promise.allSettled(
-    subscriptions.map(sub =>
-      webpush.sendNotification(sub, payload).catch(async err => {
-        if (err.statusCode === 410 || err.statusCode === 404) {
-          await pushStore.remove(sub.endpoint);
-        }
-        console.error(`Error sending to ${sub.endpoint}:`, err.message);
-      })
-    )
+  const broadcast = await sendPushBroadcast(
+    subscriptions,
+    payload,
+    endpoint => pushStore.remove(endpoint)
   );
 
-  const sent = results.filter(r => r.status === 'fulfilled').length;
-  console.log(`Push broadcast: ${sent}/${subscriptions.length} sent`);
-  res.json({ ok: true, sent });
+  if (broadcast.sent > 0) {
+    lastNotifyTime = now;
+  }
+
+  broadcast.results
+    .filter(result => !result.ok)
+    .forEach(result => {
+      console.error(`Error sending to ${result.endpoint}:`, result.error);
+    });
+
+  console.log(`Push broadcast: ${broadcast.sent}/${subscriptions.length} sent (${broadcast.failed} failed)`);
+  res.json({ ok: true, sent: broadcast.sent, failed: broadcast.failed });
 });
 
 app.get('/api/push/subscriptions', authMiddleware, async (req, res) => {

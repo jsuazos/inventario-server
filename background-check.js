@@ -1,20 +1,15 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import webpush from 'web-push';
 import * as pushStore from './sheets-store.js';
+import { getInventarioData } from './inventory-service.js';
+import { createPayload, sendPushBroadcast } from './push-notification-service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SNAPSHOT_PATH = path.join(__dirname, 'library-snapshot.json');
 
 let lastNotifyTime = 0;
 const NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
-
-function getApiUrl() {
-  const token = process.env.SECRET_TOKEN_INVENTARIO;
-  if (!token) return null;
-  return `https://script.google.com/macros/s/${token}/exec?path=INVENTARIO&action=read`;
-}
 
 function createKey(item) {
   return `${item.ID || ''}|${item.Artista || ''}|${item.Disco || ''}|${item.Año || ''}|${item.Recibido || ''}`.toLowerCase();
@@ -66,22 +61,9 @@ function getChanges(oldArray, newArray) {
 }
 
 async function fetchLibraryData() {
-  const url = getApiUrl();
-  if (!url) {
-    console.error('Background check: SECRET_TOKEN_INVENTARIO no configurado');
-    return null;
-  }
-
   try {
-    const res = await fetch(url);
-    const data = await res.json();
-    const items = (data.data || []).filter(item => item.Visible === 'SI');
-    items.sort((a, b) => {
-      const keyA = `${a.Artista || ''} ${a.Año || ''} ${a.Disco || ''} ${a.Recibido || ''}`.toLowerCase();
-      const keyB = `${b.Artista || ''} ${b.Año || ''} ${b.Disco || ''} ${b.Recibido || ''}`.toLowerCase();
-      return keyA.localeCompare(keyB);
-    });
-    return items;
+    const { publicData } = await getInventarioData({ forceRefresh: true });
+    return publicData;
   } catch (err) {
     console.error('Background check: error fetching data:', err.message);
     return null;
@@ -102,7 +84,7 @@ async function broadcastPush(added, removed) {
 
   const body = parts.join(' · ') || 'Hay cambios en la biblioteca';
 
-  const payload = JSON.stringify({
+  const payload = createPayload({
     title: '📀 Biblioteca actualizada',
     body,
     data: { url: './' },
@@ -111,20 +93,23 @@ async function broadcastPush(added, removed) {
   const subscriptions = await pushStore.getAll();
   if (subscriptions.length === 0) return;
 
-  lastNotifyTime = now;
-
-  const results = await Promise.allSettled(
-    subscriptions.map(sub =>
-      webpush.sendNotification(sub, payload).catch(async err => {
-        if (err.statusCode === 410 || err.statusCode === 404) {
-          await pushStore.remove(sub.endpoint);
-        }
-      })
-    )
+  const broadcast = await sendPushBroadcast(
+    subscriptions,
+    payload,
+    endpoint => pushStore.remove(endpoint)
   );
 
-  const sent = results.filter(r => r.status === 'fulfilled').length;
-  console.log(`Background check: cambios detectados, push enviado a ${sent}/${subscriptions.length} dispositivos`);
+  if (broadcast.sent > 0) {
+    lastNotifyTime = now;
+  }
+
+  broadcast.results
+    .filter(result => !result.ok)
+    .forEach(result => {
+      console.error(`Background check push error to ${result.endpoint}:`, result.error);
+    });
+
+  console.log(`Background check: cambios detectados, push enviado a ${broadcast.sent}/${subscriptions.length} dispositivos (${broadcast.failed} fallidos)`);
 }
 
 async function checkForChanges() {

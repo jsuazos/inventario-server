@@ -31,7 +31,6 @@ const PUBLIC_INVENTARIO_RATE_LIMIT = parseInt(process.env.PUBLIC_INVENTARIO_RATE
 const PUBLIC_INVENTARIO_RATE_WINDOW_MS = parseInt(process.env.PUBLIC_INVENTARIO_RATE_WINDOW_MS || '60000', 10);
 const ALLOWED_PUBLIC_ORIGINS = (process.env.ALLOWED_PUBLIC_ORIGINS || [
   'https://jsuazos.github.io',
-  'https://jsuazo.github.io',
   'http://localhost:5173',
   'http://127.0.0.1:5173'
 ].join(',')).split(',').map(origin => origin.trim()).filter(Boolean);

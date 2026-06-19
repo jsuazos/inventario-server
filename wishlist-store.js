@@ -283,3 +283,49 @@ export async function remove(usuario, rowId) {
   await rewriteRows(filtered);
   return true;
 }
+
+export async function update(usuario, rowId, item) {
+  ensureWishlistStorageConfigured();
+
+  await ensureSheet();
+
+  const allItems = await getAll();
+  const existing = allItems.find(entry => entry.usuario === usuario && entry.rowId === rowId);
+  if (!existing) {
+    return null;
+  }
+
+  const merged = {
+    ...existing,
+    discogsId: item.discogsId || item.ID || '',
+    Artista: item.Artista || existing.Artista,
+    Disco: item.Disco || existing.Disco,
+    Año: item.Año || '',
+    Tipo: item.Tipo || '',
+    Genero: item.Genero || '',
+    img: item.img || '',
+    imgFULL: item.imgFULL || '',
+    Recibido: item.Recibido || existing.Recibido || '',
+    notes: item.notes || '',
+    priority: item.priority || '',
+  };
+
+  merged.wishlistKey = buildWishlistKey(merged);
+
+  const duplicated = allItems.find(entry =>
+    entry.usuario === usuario &&
+    entry.rowId !== rowId &&
+    entry.wishlistKey === merged.wishlistKey
+  );
+
+  if (duplicated) {
+    return duplicated;
+  }
+
+  const updatedItems = allItems.map(entry =>
+    entry.usuario === usuario && entry.rowId === rowId ? merged : entry
+  );
+
+  await rewriteRows(updatedItems);
+  return merged;
+}

@@ -234,6 +234,22 @@ app.get('/api/discogs', async (req, res) => {
   }
 });
 
+app.get('/api/discogs/release/:id', async (req, res) => {
+  const releaseId = String(req.params.id || '').replace(/^[^0-9]+/, '').trim();
+  if (!releaseId) return res.status(400).json({ error: 'Falta un ID de release válido' });
+
+  const url = `https://api.discogs.com/releases/${encodeURIComponent(releaseId)}?token=${process.env.DISCOGS_TOKEN}`;
+
+  try {
+    const response = await fetch(url);
+    const data = await response.json();
+    res.json(data);
+  } catch (error) {
+    console.error('Error en Discogs release:', error);
+    res.status(500).json({ error: 'Error al consultar release en Discogs' });
+  }
+});
+
 app.post('/api/inventario', authMiddleware, async (req, res) => {
   res.status(501).json({ error: 'Funcionalidad no implementada aún' });
 });
@@ -288,6 +304,25 @@ app.post('/api/wishlist', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error agregando a wishlist:', error);
     res.status(500).json({ error: 'Error agregando a wishlist' });
+  }
+});
+
+app.put('/api/wishlist/:rowId', authMiddleware, async (req, res) => {
+  try {
+    const item = req.body || {};
+    if (!item.Artista || !item.Disco) {
+      return res.status(400).json({ error: 'Datos de wishlist inválidos' });
+    }
+
+    const updated = await wishlistStore.update(req.user.usuario, req.params.rowId, item);
+    if (!updated) {
+      return res.status(404).json({ error: 'Elemento de wishlist no encontrado' });
+    }
+
+    res.json({ ok: true, item: updated });
+  } catch (error) {
+    console.error('Error editando wishlist:', error);
+    res.status(500).json({ error: 'Error editando wishlist' });
   }
 });
 

@@ -8,7 +8,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import * as pushStore from './sheets-store.js';
 import * as wishlistStore from './wishlist-store.js';
-import { getInventarioData } from './inventory-service.js';
+import * as inventoryStore from './inventory-store.js';
+import { getInventarioData, invalidateInventarioCache } from './inventory-service.js';
 import { createPayload, sendPushBroadcast } from './push-notification-service.js';
 import { start as startBackgroundCheck } from './background-check.js';
 
@@ -251,7 +252,19 @@ app.get('/api/discogs/release/:id', async (req, res) => {
 });
 
 app.post('/api/inventario', authMiddleware, async (req, res) => {
-  res.status(501).json({ error: 'Funcionalidad no implementada aún' });
+  try {
+    const item = req.body || {};
+    if (!item.Artista || !item.Disco) {
+      return res.status(400).json({ error: 'Datos de inventario inválidos' });
+    }
+
+    const saved = await inventoryStore.add(item);
+    invalidateInventarioCache();
+    res.json({ ok: true, item: saved });
+  } catch (error) {
+    console.error('Error agregando a inventario:', error);
+    res.status(500).json({ error: 'Error agregando a inventario' });
+  }
 });
 
 app.put('/api/inventario', authMiddleware, async (req, res) => {

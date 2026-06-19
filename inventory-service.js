@@ -9,6 +9,15 @@ let inventarioCache = {
 
 let inventarioInFlightPromise = null;
 
+export function invalidateInventarioCache() {
+  inventarioCache = {
+    fetchedAt: 0,
+    rawData: null,
+    publicData: null,
+  };
+  inventarioInFlightPromise = null;
+}
+
 export function normalizeInventarioItem(item = {}) {
   return {
     ID: item.ID || '',

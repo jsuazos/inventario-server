@@ -7,6 +7,7 @@ import webpush from 'web-push';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import * as pushStore from './sheets-store.js';
+import * as wishlistStore from './wishlist-store.js';
 import { getInventarioData } from './inventory-service.js';
 import { createPayload, sendPushBroadcast } from './push-notification-service.js';
 import { start as startBackgroundCheck } from './background-check.js';
@@ -243,6 +244,61 @@ app.put('/api/inventario', authMiddleware, async (req, res) => {
 
 app.delete('/api/inventario', authMiddleware, async (req, res) => {
   res.status(501).json({ error: 'Funcionalidad no implementada aún' });
+});
+
+app.get('/api/wishlist-users', async (req, res) => {
+  try {
+    const users = await wishlistStore.getUsers();
+    res.json({ users });
+  } catch (error) {
+    console.error('Error al consultar usuarios con wishlist:', error);
+    res.status(500).json({ error: 'Error al consultar usuarios con wishlist' });
+  }
+});
+
+app.get('/api/wishlist/me', authMiddleware, async (req, res) => {
+  try {
+    const items = await wishlistStore.getByUser(req.user.usuario);
+    res.json({ usuario: req.user.usuario, items });
+  } catch (error) {
+    console.error('Error al consultar wishlist propia:', error);
+    res.status(500).json({ error: 'Error al consultar wishlist propia' });
+  }
+});
+
+app.get('/api/wishlist/:usuario', async (req, res) => {
+  try {
+    const items = await wishlistStore.getByUser(req.params.usuario);
+    res.json({ usuario: req.params.usuario, items });
+  } catch (error) {
+    console.error('Error al consultar wishlist pública:', error);
+    res.status(500).json({ error: 'Error al consultar wishlist pública' });
+  }
+});
+
+app.post('/api/wishlist', authMiddleware, async (req, res) => {
+  try {
+    const item = req.body || {};
+    if (!item.Artista || !item.Disco) {
+      return res.status(400).json({ error: 'Datos de wishlist inválidos' });
+    }
+
+    const saved = await wishlistStore.add(req.user.usuario, item);
+    res.json({ ok: true, item: saved });
+  } catch (error) {
+    console.error('Error agregando a wishlist:', error);
+    res.status(500).json({ error: 'Error agregando a wishlist' });
+  }
+});
+
+app.delete('/api/wishlist/:rowId', authMiddleware, async (req, res) => {
+  try {
+    const removed = await wishlistStore.remove(req.user.usuario, req.params.rowId);
+    res.json({ ok: removed });
+  } catch (error) {
+    console.error('Error quitando de wishlist:', error);
+    res.status(500).json({ error: 'Error quitando de wishlist' });
+  }
 });
 
 // --- Push notifications ---

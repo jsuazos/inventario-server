@@ -288,7 +288,23 @@ app.put('/api/inventario', authMiddleware, async (req, res) => {
 });
 
 app.delete('/api/inventario', authMiddleware, async (req, res) => {
-  res.status(501).json({ error: 'Funcionalidad no implementada aún' });
+  try {
+    const { originalItem } = req.body || {};
+    if (!originalItem) {
+      return res.status(400).json({ error: 'Falta el item original de inventario' });
+    }
+
+    const removed = await inventoryStore.softRemove(originalItem);
+    if (!removed) {
+      return res.status(404).json({ error: 'Elemento de inventario no encontrado' });
+    }
+
+    invalidateInventarioCache();
+    res.json({ ok: true, item: removed });
+  } catch (error) {
+    console.error('Error ocultando inventario:', error);
+    res.status(500).json({ error: 'Error ocultando inventario' });
+  }
 });
 
 app.get('/api/wishlist-users', async (req, res) => {

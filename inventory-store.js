@@ -198,3 +198,10 @@ export async function update(originalItem, item) {
 
   return rowToObject(headers, updatedRow);
 }
+
+export async function softRemove(originalItem) {
+  return update(originalItem, {
+    ...originalItem,
+    Visible: 'NO',
+  });
+}

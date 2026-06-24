@@ -88,30 +88,57 @@ function getNextOrden(headers, rows) {
   return String(maxOrden + 1);
 }
 
-function buildInventoryValueMap(item, headers, rows) {
+function rowToObject(headers, row = []) {
+  return headers.reduce((acc, header, index) => {
+    acc[header] = row[index] || '';
+    return acc;
+  }, {});
+}
+
+function findRowIndex(headers, rows, originalItem = {}) {
+  const ordenIndex = headers.indexOf('Orden');
+
+  if (ordenIndex !== -1 && originalItem.Orden) {
+    const rowIndex = rows.findIndex(row => String(row[ordenIndex] || '') === String(originalItem.Orden));
+    if (rowIndex !== -1) {
+      return rowIndex;
+    }
+  }
+
+  return rows.findIndex(row => {
+    const rowData = rowToObject(headers, row);
+    return String(rowData.ID || '') === String(originalItem.ID || '') &&
+      String(rowData.Artista || '') === String(originalItem.Artista || '') &&
+      String(rowData.Disco || '') === String(originalItem.Disco || '') &&
+      String(rowData['Año'] || '') === String(originalItem['Año'] || originalItem.Año || '');
+  });
+}
+
+function buildInventoryValueMap(item, headers, rows, existingRow = null) {
   const numericDiscogsId = String(item.discogsId || item.ID || '').replace(/\D+/g, '');
+  const currentRow = existingRow || {};
 
   return {
-    ID: numericDiscogsId ? `r${numericDiscogsId}` : '',
-    Artista: item.Artista || '',
-    Disco: item.Disco || '',
-    'Año': item.Año || '',
-    Tipo: item.Tipo || '',
-    Genero: item.Genero || '',
-    Disqueria: item.Disqueria || '',
-    Catalogo: item.Catalogo || '',
-    img: item.img || '',
-    imgFULL: item.imgFULL || '',
-    Visible: 'SI',
-    Recibido: item.Recibido || 'SI',
-    Orden: getNextOrden(headers, rows),
-    Origen: item.Origen || '',
-    OrigenISO: item.OrigenISO || '',
+    ID: numericDiscogsId ? `r${numericDiscogsId}` : (currentRow.ID || ''),
+    Artista: item.Artista || currentRow.Artista || '',
+    Disco: item.Disco || currentRow.Disco || '',
+    'Año': item.Año || currentRow['Año'] || '',
+    Tipo: item.Tipo || currentRow.Tipo || '',
+    Genero: item.Genero || currentRow.Genero || '',
+    Disqueria: item.Disqueria || currentRow.Disqueria || '',
+    Catalogo: item.Catalogo || currentRow.Catalogo || '',
+    img: item.img || currentRow.img || '',
+    imgFULL: item.imgFULL || currentRow.imgFULL || '',
+    Visible: item.Visible || currentRow.Visible || 'SI',
+    Recibido: item.Recibido || currentRow.Recibido || 'SI',
+    Orden: currentRow.Orden || getNextOrden(headers, rows),
+    Origen: item.Origen || currentRow.Origen || '',
+    OrigenISO: item.OrigenISO || currentRow.OrigenISO || '',
   };
 }
 
-function mapItemToRow(headers, rows, item) {
-  const valueMap = buildInventoryValueMap(item, headers, rows);
+function mapItemToRow(headers, rows, item, existingRow = null) {
+  const valueMap = buildInventoryValueMap(item, headers, rows, existingRow);
   return headers.map(header => valueMap[header] ?? '');
 }
 
@@ -141,4 +168,33 @@ export async function add(item) {
     Visible: row[headers.indexOf('Visible')] || 'SI',
     Orden: row[headers.indexOf('Orden')] || '',
   };
+}
+
+export async function update(originalItem, item) {
+  ensureInventoryStorageConfigured();
+
+  const { headers, rows } = await getHeadersAndRows();
+  const rowIndex = findRowIndex(headers, rows, originalItem);
+
+  if (rowIndex === -1) {
+    return null;
+  }
+
+  const existingRow = rowToObject(headers, rows[rowIndex]);
+  const updatedRow = mapItemToRow(headers, rows, item, existingRow);
+  const values = [headers, ...rows];
+  values[rowIndex + 1] = updatedRow;
+
+  const sheets = await getSheets();
+  const spreadsheetId = getSpreadsheetId();
+  const sheetName = getSheetName();
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `${sheetName}!A1:ZZ${values.length}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values },
+  });
+
+  return rowToObject(headers, updatedRow);
 }

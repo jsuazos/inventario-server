@@ -268,7 +268,23 @@ app.post('/api/inventario', authMiddleware, async (req, res) => {
 });
 
 app.put('/api/inventario', authMiddleware, async (req, res) => {
-  res.status(501).json({ error: 'Funcionalidad no implementada aún' });
+  try {
+    const { originalItem, item } = req.body || {};
+    if (!originalItem || !item || !item.Artista || !item.Disco) {
+      return res.status(400).json({ error: 'Datos de edición de inventario inválidos' });
+    }
+
+    const updated = await inventoryStore.update(originalItem, item);
+    if (!updated) {
+      return res.status(404).json({ error: 'Elemento de inventario no encontrado' });
+    }
+
+    invalidateInventarioCache();
+    res.json({ ok: true, item: updated });
+  } catch (error) {
+    console.error('Error editando inventario:', error);
+    res.status(500).json({ error: 'Error editando inventario' });
+  }
 });
 
 app.delete('/api/inventario', authMiddleware, async (req, res) => {

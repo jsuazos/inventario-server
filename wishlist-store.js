@@ -5,7 +5,7 @@ function looksLikeSpreadsheetId(value) {
   return typeof value === 'string' && /^[a-zA-Z0-9-_]{20,}$/.test(value.trim());
 }
 
-const HEADERS = ['row_id', 'usuario', 'wishlist_key', 'discogs_id', 'artista', 'disco', 'anio', 'tipo', 'genero', 'img', 'img_full', 'recibido', 'notes', 'priority', 'created_at'];
+const HEADERS = ['row_id', 'usuario', 'wishlist_key', 'discogs_id', 'artista', 'disco', 'anio', 'tipo', 'genero', 'img', 'img_full', 'recibido', 'notes', 'priority', 'status', 'created_at'];
 
 function getSpreadsheetId() {
   const wishlistSheetId = process.env.WISHLIST_SHEET_ID;
@@ -82,7 +82,7 @@ async function ensureSheet() {
 
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!A1:O1`,
+      range: `${sheetName}!A1:P1`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [HEADERS],
@@ -104,6 +104,7 @@ function ensureWishlistStorageConfigured() {
 }
 
 function rowToWishlistItem(row = []) {
+  const hasStatusColumn = row.length >= 16;
   return {
     rowId: row[0] || '',
     usuario: row[1] || '',
@@ -119,7 +120,8 @@ function rowToWishlistItem(row = []) {
     Recibido: row[11] || '',
     notes: row[12] || '',
     priority: row[13] || '',
-    createdAt: row[14] || '',
+    status: hasStatusColumn ? (row[14] || 'wishlist') : 'wishlist',
+    createdAt: hasStatusColumn ? (row[15] || '') : (row[14] || ''),
   };
 }
 
@@ -151,6 +153,7 @@ function wishlistItemToRow(item) {
     item.Recibido || '',
     item.notes || '',
     item.priority || '',
+    item.status || 'wishlist',
     item.createdAt || '',
   ];
 }
@@ -161,7 +164,7 @@ async function getRawRows() {
   const sheetName = getSheetName();
   const result = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: `${sheetName}!A:O`,
+    range: `${sheetName}!A:P`,
   });
 
   return result.data.values || [];
@@ -175,12 +178,12 @@ async function rewriteRows(items) {
 
   await sheets.spreadsheets.values.clear({
     spreadsheetId,
-    range: `${sheetName}!A:O`,
+    range: `${sheetName}!A:P`,
   });
 
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `${sheetName}!A1:O${values.length}`,
+    range: `${sheetName}!A1:P${values.length}`,
     valueInputOption: 'USER_ENTERED',
     requestBody: { values },
   });
@@ -250,6 +253,7 @@ export async function add(usuario, item) {
     Recibido: item.Recibido || '',
     notes: item.notes || '',
     priority: item.priority || '',
+    status: item.status || 'wishlist',
     createdAt: new Date().toISOString(),
   };
 
@@ -258,7 +262,7 @@ export async function add(usuario, item) {
   const sheetName = getSheetName();
   await sheets.spreadsheets.values.append({
     spreadsheetId,
-    range: `${sheetName}!A:O`,
+    range: `${sheetName}!A:P`,
     valueInputOption: 'USER_ENTERED',
     requestBody: {
       values: [wishlistItemToRow(wishlistItem)],
@@ -308,6 +312,7 @@ export async function update(usuario, rowId, item) {
     Recibido: item.Recibido || existing.Recibido || '',
     notes: item.notes || '',
     priority: item.priority || '',
+    status: item.status || existing.status || 'wishlist',
   };
 
   merged.wishlistKey = buildWishlistKey(merged);

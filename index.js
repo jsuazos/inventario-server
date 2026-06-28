@@ -157,12 +157,13 @@ app.post('/api/login/verify', authMiddleware, (req, res) => {
 
 app.get('/api/inventario-public', publicInventarioAccessMiddleware, async (req, res) => {
   try {
-    const { publicData, fetchedAt } = await getInventarioData();
+    const forceRefresh = req.query.refresh === '1';
+    const { publicData, fetchedAt } = await getInventarioData({ forceRefresh });
     res.set('Cache-Control', 'private, max-age=60');
     res.json({
       data: publicData,
       meta: {
-        cached: true,
+        cached: !forceRefresh,
         fetchedAt: new Date(fetchedAt).toISOString(),
         count: publicData.length,
       },
@@ -175,11 +176,12 @@ app.get('/api/inventario-public', publicInventarioAccessMiddleware, async (req, 
 
 app.get('/api/inventario', authMiddleware, async (req, res) => {
   try {
-    const { rawData, fetchedAt } = await getInventarioData();
+    const forceRefresh = req.query.refresh === '1';
+    const { rawData, fetchedAt } = await getInventarioData({ forceRefresh });
     res.json({
       data: rawData,
       meta: {
-        cached: true,
+        cached: !forceRefresh,
         fetchedAt: new Date(fetchedAt).toISOString(),
         count: rawData.length,
       },
@@ -284,6 +286,26 @@ app.put('/api/inventario', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error editando inventario:', error);
     res.status(500).json({ error: 'Error editando inventario' });
+  }
+});
+
+app.patch('/api/inventario/recibido', authMiddleware, async (req, res) => {
+  try {
+    const { originalItem } = req.body || {};
+    if (!originalItem) {
+      return res.status(400).json({ error: 'Falta el item original de inventario' });
+    }
+
+    const updated = await inventoryStore.markReceived(originalItem);
+    if (!updated) {
+      return res.status(404).json({ error: 'Elemento de inventario no encontrado' });
+    }
+
+    invalidateInventarioCache();
+    res.json({ ok: true, item: updated });
+  } catch (error) {
+    console.error('Error marcando inventario como recibido:', error);
+    res.status(500).json({ error: 'Error marcando inventario como recibido' });
   }
 });
 

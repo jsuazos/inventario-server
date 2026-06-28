@@ -151,7 +151,13 @@ function buildInventoryValueMap(item, headers, rows, existingRow = null) {
 
 function mapItemToRow(headers, rows, item, existingRow = null) {
   const valueMap = buildInventoryValueMap(item, headers, rows, existingRow);
-  return headers.map(header => valueMap[header] ?? '');
+  return headers.map(header => {
+    if (Object.prototype.hasOwnProperty.call(valueMap, header)) {
+      return valueMap[header] ?? '';
+    }
+
+    return existingRow?.[header] ?? '';
+  });
 }
 
 export async function add(item) {
@@ -213,7 +219,12 @@ export async function update(originalItem, item) {
 
 export async function softRemove(originalItem) {
   return update(originalItem, {
-    ...originalItem,
     Visible: 'NO',
+  });
+}
+
+export async function markReceived(originalItem) {
+  return update(originalItem, {
+    Recibido: 'SI',
   });
 }

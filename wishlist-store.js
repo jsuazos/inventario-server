@@ -1,192 +1,44 @@
-import { google } from 'googleapis';
-import fs from 'fs';
+import { supabase } from './db.js';
 
-function looksLikeSpreadsheetId(value) {
-  return typeof value === 'string' && /^[a-zA-Z0-9-_]{20,}$/.test(value.trim());
-}
-
-const HEADERS = ['row_id', 'usuario', 'wishlist_key', 'discogs_id', 'artista', 'disco', 'anio', 'tipo', 'genero', 'img', 'img_full', 'recibido', 'notes', 'priority', 'status', 'created_at'];
-
-function getSpreadsheetId() {
-  const wishlistSheetId = process.env.WISHLIST_SHEET_ID;
-
-  if (looksLikeSpreadsheetId(wishlistSheetId)) {
-    return wishlistSheetId;
-  }
-
-  if (wishlistSheetId) {
-    console.warn('WISHLIST_SHEET_ID no parece válido, usando PUSH_SHEET_ID como fallback');
-  }
-
-  return process.env.PUSH_SHEET_ID;
-}
-
-function getSheetName() {
-  return process.env.WISHLIST_SHEET_NAME || 'Wishlist';
-}
-
-function getCredentials() {
-  if (process.env.GOOGLE_SERVICE_ACCOUNT_FILE) {
-    const raw = fs.readFileSync(process.env.GOOGLE_SERVICE_ACCOUNT_FILE, 'utf-8');
-    return JSON.parse(raw);
-  }
-
-  if (process.env.GOOGLE_SERVICE_ACCOUNT) {
-    return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
-  }
-
-  throw new Error('GOOGLE_SERVICE_ACCOUNT o GOOGLE_SERVICE_ACCOUNT_FILE no configurados');
-}
-
-function getAuth() {
-  return new google.auth.GoogleAuth({
-    credentials: getCredentials(),
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
-}
-
-let sheetsClient = null;
-let sheetEnsured = false;
-
-async function getSheets() {
-  if (sheetsClient) {
-    return sheetsClient;
-  }
-
-  const auth = await getAuth();
-  sheetsClient = google.sheets({ version: 'v4', auth });
-  return sheetsClient;
-}
-
-async function ensureSheet() {
-  if (sheetEnsured) {
-    return;
-  }
-
-  try {
-    sheetEnsured = true;
-    const sheets = await getSheets();
-    const spreadsheetId = getSpreadsheetId();
-    const sheetName = getSheetName();
-    const meta = await sheets.spreadsheets.get({ spreadsheetId });
-    const exists = (meta.data.sheets || []).some(sheet => sheet.properties.title === sheetName);
-
-    if (!exists) {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: {
-          requests: [{ addSheet: { properties: { title: sheetName } } }],
-        },
-      });
-    }
-
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: `${sheetName}!A1:P1`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [HEADERS],
-      },
-    });
-  } catch (error) {
-    sheetEnsured = false;
-    console.error('Error asegurando sheet de wishlist:', error.message);
-    throw error;
-  }
-}
-
-function ensureWishlistStorageConfigured() {
-  const spreadsheetId = getSpreadsheetId();
-
-  if (!spreadsheetId) {
-    throw new Error('WISHLIST_SHEET_ID/PUSH_SHEET_ID no configurado');
-  }
-}
-
-function rowToWishlistItem(row = []) {
-  const hasStatusColumn = row.length >= 16;
+function normalizeWishlistItem(item = {}) {
+  const numericDiscogsId = String(item.discogsId || item.ID || '').replace(/\D+/g, '');
   return {
-    rowId: row[0] || '',
-    usuario: row[1] || '',
-    wishlistKey: row[2] || '',
-    discogsId: row[3] || '',
-    Artista: row[4] || '',
-    Disco: row[5] || '',
-    Año: row[6] || '',
-    Tipo: row[7] || '',
-    Genero: row[8] || '',
-    img: row[9] || '',
-    imgFULL: row[10] || '',
-    Recibido: row[11] || '',
-    notes: row[12] || '',
-    priority: row[13] || '',
-    status: hasStatusColumn ? (row[14] || 'wishlist') : 'wishlist',
-    createdAt: hasStatusColumn ? (row[15] || '') : (row[14] || ''),
+    wishlist_key: buildWishlistKey(item),
+    discogs_id: numericDiscogsId || '',
+    artista: item.Artista || '',
+    disco: item.Disco || '',
+    año: item.Año ? Number(item.Año) : null,
+    tipo: item.Tipo || '',
+    genero: item.Genero || '',
+    img: item.img || '',
+    img_full: item.imgFULL || '',
+    recibido: item.Recibido ? item.Recibido === 'SI' || item.Recibido === true : false,
+    notes: item.notes || '',
+    priority: item.priority || '',
+    status: item.status || 'wishlist',
   };
 }
 
-function normalizeWishlistRows(rows = []) {
-  if (rows.length < 2) {
-    return [];
-  }
-
-  return rows
-    .slice(1)
-    .map(rowToWishlistItem)
-    .filter(item => item.wishlistKey && item.usuario)
-    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-}
-
-function wishlistItemToRow(item) {
-  return [
-    item.rowId || '',
-    item.usuario || '',
-    item.wishlistKey || '',
-    item.discogsId || '',
-    item.Artista || '',
-    item.Disco || '',
-    item.Año || '',
-    item.Tipo || '',
-    item.Genero || '',
-    item.img || '',
-    item.imgFULL || '',
-    item.Recibido || '',
-    item.notes || '',
-    item.priority || '',
-    item.status || 'wishlist',
-    item.createdAt || '',
-  ];
-}
-
-async function getRawRows() {
-  const sheets = await getSheets();
-  const spreadsheetId = getSpreadsheetId();
-  const sheetName = getSheetName();
-  const result = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${sheetName}!A:P`,
-  });
-
-  return result.data.values || [];
-}
-
-async function rewriteRows(items) {
-  const sheets = await getSheets();
-  const spreadsheetId = getSpreadsheetId();
-  const sheetName = getSheetName();
-  const values = [HEADERS, ...items.map(wishlistItemToRow)];
-
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId,
-    range: `${sheetName}!A:P`,
-  });
-
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `${sheetName}!A1:P${values.length}`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: { values },
-  });
+function denormalizeWishlistItem(row) {
+  if (!row) return null;
+  return {
+    rowId: row.id,
+    usuario: row.usuario,
+    wishlistKey: row.wishlist_key,
+    discogsId: row.discogs_id,
+    Artista: row.artista,
+    Disco: row.disco,
+    Año: row.año ? String(row.año) : '',
+    Tipo: row.tipo,
+    Genero: row.genero,
+    img: row.img,
+    imgFULL: row.img_full,
+    Recibido: row.recibido ? 'SI' : 'NO',
+    notes: row.notes,
+    priority: row.priority,
+    status: row.status,
+    createdAt: row.created_at,
+  };
 }
 
 export function buildWishlistKey(item = {}) {
@@ -203,134 +55,128 @@ export function buildWishlistKey(item = {}) {
 }
 
 export async function getAll() {
-  ensureWishlistStorageConfigured();
+  const { data, error } = await supabase
+    .from('wishlist')
+    .select('*')
+    .order('created_at', { ascending: false });
 
-  await ensureSheet();
-
-  try {
-    const rows = await getRawRows();
-    return normalizeWishlistRows(rows);
-  } catch (error) {
-    console.error('Error leyendo wishlist desde Google Sheets:', error.message);
+  if (error) {
+    console.error('Error leyendo wishlist:', error.message);
     return [];
   }
+
+  return (data || []).map(denormalizeWishlistItem);
 }
 
 export async function getByUser(usuario) {
-  const items = await getAll();
-  return items.filter(item => item.usuario === usuario);
+  const { data, error } = await supabase
+    .from('wishlist')
+    .select('*')
+    .eq('usuario', usuario)
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error(`Error leyendo wishlist de ${usuario}:`, error.message);
+    return [];
+  }
+
+  return (data || []).map(denormalizeWishlistItem);
 }
 
 export async function getUsers() {
-  const items = await getAll();
-  return [...new Set(items.map(item => item.usuario))].sort((a, b) => a.localeCompare(b));
+  const { data, error } = await supabase
+    .from('wishlist')
+    .select('usuario', { distinct: true })
+    .order('usuario');
+
+  if (error) {
+    console.error('Error consultando usuarios de wishlist:', error.message);
+    return [];
+  }
+
+  return (data || []).map(row => row.usuario);
 }
 
 export async function add(usuario, item) {
-  ensureWishlistStorageConfigured();
-
-  await ensureSheet();
-
   const wishlistKey = buildWishlistKey(item);
-  const allItems = await getAll();
-  const existing = allItems.find(entry => entry.usuario === usuario && entry.wishlistKey === wishlistKey);
+
+  const { data: existing } = await supabase
+    .from('wishlist')
+    .select('*')
+    .eq('usuario', usuario)
+    .eq('wishlist_key', wishlistKey)
+    .maybeSingle();
+
   if (existing) {
-    return existing;
+    return denormalizeWishlistItem(existing);
   }
 
-  const wishlistItem = {
-    rowId: crypto.randomUUID(),
-    usuario,
-    wishlistKey,
-    discogsId: item.discogsId || item.ID || '',
-    Artista: item.Artista || '',
-    Disco: item.Disco || '',
-    Año: item.Año || '',
-    Tipo: item.Tipo || '',
-    Genero: item.Genero || '',
-    img: item.img || '',
-    imgFULL: item.imgFULL || '',
-    Recibido: item.Recibido || '',
-    notes: item.notes || '',
-    priority: item.priority || '',
-    status: item.status || 'wishlist',
-    createdAt: new Date().toISOString(),
-  };
+  const normalized = normalizeWishlistItem(item);
 
-  const sheets = await getSheets();
-  const spreadsheetId = getSpreadsheetId();
-  const sheetName = getSheetName();
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${sheetName}!A:P`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: {
-      values: [wishlistItemToRow(wishlistItem)],
-    },
-  });
+  const { data, error } = await supabase
+    .from('wishlist')
+    .insert({ ...normalized, usuario })
+    .select()
+    .single();
 
-  return wishlistItem;
+  if (error) {
+    console.error('Error agregando a wishlist:', error.message);
+    throw new Error('Error al guardar en wishlist');
+  }
+
+  return denormalizeWishlistItem(data);
 }
 
 export async function remove(usuario, rowId) {
-  ensureWishlistStorageConfigured();
+  const { data, error } = await supabase
+    .from('wishlist')
+    .delete()
+    .eq('usuario', usuario)
+    .eq('id', rowId)
+    .select()
+    .single();
 
-  await ensureSheet();
-
-  const allItems = await getAll();
-  const filtered = allItems.filter(item => !(item.usuario === usuario && item.rowId === rowId));
-
-  if (filtered.length === allItems.length) {
-    return false;
+  if (error) {
+    if (error.code === 'PGRST116') return false;
+    console.error('Error quitando de wishlist:', error.message);
+    throw new Error('Error al quitar de wishlist');
   }
 
-  await rewriteRows(filtered);
-  return true;
+  return !!data;
 }
 
 export async function update(usuario, rowId, item) {
-  ensureWishlistStorageConfigured();
+  const wishlistKey = buildWishlistKey(item);
 
-  await ensureSheet();
+  if (wishlistKey) {
+    const { data: duplicated } = await supabase
+      .from('wishlist')
+      .select('id')
+      .eq('usuario', usuario)
+      .eq('wishlist_key', wishlistKey)
+      .neq('id', rowId)
+      .maybeSingle();
 
-  const allItems = await getAll();
-  const existing = allItems.find(entry => entry.usuario === usuario && entry.rowId === rowId);
-  if (!existing) {
-    return null;
+    if (duplicated) {
+      return denormalizeWishlistItem(duplicated);
+    }
   }
 
-  const merged = {
-    ...existing,
-    discogsId: item.discogsId || item.ID || '',
-    Artista: item.Artista || existing.Artista,
-    Disco: item.Disco || existing.Disco,
-    Año: item.Año || '',
-    Tipo: item.Tipo || '',
-    Genero: item.Genero || '',
-    img: item.img || '',
-    imgFULL: item.imgFULL || '',
-    Recibido: item.Recibido || existing.Recibido || '',
-    notes: item.notes || '',
-    priority: item.priority || '',
-    status: item.status || existing.status || 'wishlist',
-  };
+  const normalized = normalizeWishlistItem(item);
 
-  merged.wishlistKey = buildWishlistKey(merged);
+  const { data, error } = await supabase
+    .from('wishlist')
+    .update(normalized)
+    .eq('usuario', usuario)
+    .eq('id', rowId)
+    .select()
+    .single();
 
-  const duplicated = allItems.find(entry =>
-    entry.usuario === usuario &&
-    entry.rowId !== rowId &&
-    entry.wishlistKey === merged.wishlistKey
-  );
-
-  if (duplicated) {
-    return duplicated;
+  if (error) {
+    if (error.code === 'PGRST116') return null;
+    console.error('Error actualizando wishlist:', error.message);
+    throw new Error('Error al actualizar wishlist');
   }
 
-  const updatedItems = allItems.map(entry =>
-    entry.usuario === usuario && entry.rowId === rowId ? merged : entry
-  );
-
-  await rewriteRows(updatedItems);
-  return merged;
+  return denormalizeWishlistItem(data);
 }

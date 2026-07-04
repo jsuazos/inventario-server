@@ -1,21 +1,16 @@
-const INVENTARIO_FETCH_TIMEOUT_MS = parseInt(process.env.INVENTARIO_FETCH_TIMEOUT_MS || '15000', 10);
-const INVENTARIO_CACHE_TTL_MS = parseInt(process.env.INVENTARIO_CACHE_TTL_MS || '300000', 10);
+import * as inventoryStore from './inventory-store.js';
 
-let inventarioCache = {
+let cache = {
   fetchedAt: 0,
   rawData: null,
   publicData: null,
 };
 
-let inventarioInFlightPromise = null;
+let inFlight = null;
 
 export function invalidateInventarioCache() {
-  inventarioCache = {
-    fetchedAt: 0,
-    rawData: null,
-    publicData: null,
-  };
-  inventarioInFlightPromise = null;
+  cache = { fetchedAt: 0, rawData: null, publicData: null };
+  inFlight = null;
 }
 
 export function normalizeInventarioItem(item = {}) {
@@ -46,60 +41,41 @@ export function sortInventario(items) {
 
 export function buildPublicInventario(rawItems) {
   return sortInventario(
-    rawItems
-      .filter(item => item.Visible === 'SI')
-      .map(normalizeInventarioItem)
+    rawItems.filter(item => item.Visible === 'SI').map(normalizeInventarioItem)
   );
-}
-
-export function getInventarioUrl() {
-  return `https://script.google.com/macros/s/${process.env.SECRET_TOKEN_INVENTARIO}/exec?path=INVENTARIO&action=read`;
-}
-
-export async function fetchInventarioFromSource() {
-  const response = await fetch(getInventarioUrl(), {
-    signal: AbortSignal.timeout(INVENTARIO_FETCH_TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Inventario upstream HTTP ${response.status}`);
-  }
-
-  const data = await response.json();
-  return Array.isArray(data.data) ? data.data : [];
 }
 
 export async function getInventarioData({ forceRefresh = false } = {}) {
   const now = Date.now();
-  if (!forceRefresh && inventarioCache.rawData && now - inventarioCache.fetchedAt < INVENTARIO_CACHE_TTL_MS) {
-    return inventarioCache;
+  const CACHE_TTL_MS = 300000;
+
+  if (!forceRefresh && cache.rawData && now - cache.fetchedAt < CACHE_TTL_MS) {
+    return cache;
   }
 
-  if (!forceRefresh && inventarioInFlightPromise) {
-    return inventarioInFlightPromise;
+  if (!forceRefresh && inFlight) {
+    return inFlight;
   }
 
-  inventarioInFlightPromise = (async () => {
+  inFlight = (async () => {
     try {
-      const rawData = await fetchInventarioFromSource();
-      inventarioCache = {
+      const rawData = await inventoryStore.getAll();
+      cache = {
         fetchedAt: Date.now(),
         rawData,
         publicData: buildPublicInventario(rawData),
       };
-
-      return inventarioCache;
+      return cache;
     } catch (error) {
-      if (inventarioCache.rawData) {
-        console.warn('Usando cache stale de inventario por error upstream:', error.message);
-        return inventarioCache;
+      if (cache.rawData) {
+        console.warn('Usando cache stale por error:', error.message);
+        return cache;
       }
-
       throw error;
     } finally {
-      inventarioInFlightPromise = null;
+      inFlight = null;
     }
   })();
 
-  return inventarioInFlightPromise;
+  return inFlight;
 }

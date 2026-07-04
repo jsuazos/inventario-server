@@ -1,230 +1,165 @@
-import { google } from 'googleapis';
-import fs from 'fs';
+import { supabase } from './db.js';
 
-function looksLikeSpreadsheetId(value) {
-  return typeof value === 'string' && /^[a-zA-Z0-9-_]{20,}$/.test(value.trim());
-}
-
-function getSpreadsheetId() {
-  const inventarioSheetId = process.env.INVENTARIO_SHEET_ID;
-
-  if (looksLikeSpreadsheetId(inventarioSheetId)) {
-    return inventarioSheetId;
-  }
-
-  return process.env.PUSH_SHEET_ID;
-}
-
-function getSheetName() {
-  return process.env.INVENTARIO_SHEET_NAME || 'INVENTARIO';
-}
-
-function getCredentials() {
-  if (process.env.GOOGLE_SERVICE_ACCOUNT_FILE) {
-    const raw = fs.readFileSync(process.env.GOOGLE_SERVICE_ACCOUNT_FILE, 'utf-8');
-    return JSON.parse(raw);
-  }
-
-  if (process.env.GOOGLE_SERVICE_ACCOUNT) {
-    return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
-  }
-
-  throw new Error('GOOGLE_SERVICE_ACCOUNT o GOOGLE_SERVICE_ACCOUNT_FILE no configurados');
-}
-
-let sheetsClient = null;
-
-async function getSheets() {
-  if (sheetsClient) {
-    return sheetsClient;
-  }
-
-  const auth = new google.auth.GoogleAuth({
-    credentials: getCredentials(),
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
-
-  sheetsClient = google.sheets({ version: 'v4', auth });
-  return sheetsClient;
-}
-
-function ensureInventoryStorageConfigured() {
-  if (!getSpreadsheetId()) {
-    throw new Error('INVENTARIO_SHEET_ID/PUSH_SHEET_ID no configurado');
-  }
-}
-
-async function getHeadersAndRows() {
-  const sheets = await getSheets();
-  const spreadsheetId = getSpreadsheetId();
-  const sheetName = getSheetName();
-  const result = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: `${sheetName}!A:ZZ`,
-  });
-
-  const values = result.data.values || [];
-  const headers = values[0] || [];
-  const rows = values.slice(1);
-
-  if (headers.length === 0) {
-    throw new Error(`La hoja ${sheetName} no tiene encabezados`);
-  }
-
-  return { headers, rows };
-}
-
-function getNextOrden(headers, rows) {
-  const ordenIndex = headers.indexOf('Orden');
-  if (ordenIndex === -1) {
-    return '';
-  }
-
-  const maxOrden = rows.reduce((max, row) => {
-    const value = parseFloat(row[ordenIndex] || '0');
-    return Number.isFinite(value) ? Math.max(max, value) : max;
-  }, 0);
-
-  return String(maxOrden + 1);
-}
-
-function rowToObject(headers, row = []) {
-  return headers.reduce((acc, header, index) => {
-    acc[header] = row[index] || '';
-    return acc;
-  }, {});
-}
-
-function findRowIndex(headers, rows, originalItem = {}) {
-  const ordenIndex = headers.indexOf('Orden');
-
-  if (ordenIndex !== -1 && originalItem.Orden) {
-    const rowIndex = rows.findIndex(row => String(row[ordenIndex] || '') === String(originalItem.Orden));
-    if (rowIndex !== -1) {
-      return rowIndex;
-    }
-  }
-
-  return rows.findIndex(row => {
-    const rowData = rowToObject(headers, row);
-    return String(rowData.ID || '') === String(originalItem.ID || '') &&
-      String(rowData.Artista || '') === String(originalItem.Artista || '') &&
-      String(rowData.Disco || '') === String(originalItem.Disco || '') &&
-      String(rowData['Año'] || '') === String(originalItem['Año'] || originalItem.Año || '');
-  });
-}
-
-function buildInventoryValueMap(item, headers, rows, existingRow = null) {
+function normalizeItem(item = {}) {
   const numericDiscogsId = String(item.discogsId || item.ID || '').replace(/\D+/g, '');
-  const currentRow = existingRow || {};
-
   return {
-    ID: numericDiscogsId ? `r${numericDiscogsId}` : (currentRow.ID || ''),
-    Artista: item.Artista || currentRow.Artista || '',
-    Disco: item.Disco || currentRow.Disco || '',
-    'Año': item.Año || currentRow['Año'] || '',
-    Tipo: item.Tipo || currentRow.Tipo || '',
-    Formato: item.Formato || currentRow.Formato || '',
-    Genero: item.Genero || currentRow.Genero || '',
-    Estilo: item.Estilo || currentRow.Estilo || currentRow.Estilos || '',
-    Estilos: item.Estilo || item.Estilos || currentRow.Estilos || currentRow.Estilo || '',
-    Disqueria: item.Disqueria || currentRow.Disqueria || '',
-    'Disquería': item.Disqueria || currentRow['Disquería'] || currentRow.Disqueria || '',
-    Sello: item.Disqueria || item.Sello || currentRow.Sello || currentRow.Disqueria || '',
-    Label: item.Disqueria || item.Label || currentRow.Label || currentRow.Disqueria || '',
-    Catalogo: item.Catalogo || currentRow.Catalogo || '',
-    'Catálogo': item.Catalogo || currentRow['Catálogo'] || currentRow.Catalogo || '',
-    Catalog: item.Catalogo || item.Catalog || currentRow.Catalog || currentRow.Catalogo || '',
-    img: item.img || currentRow.img || '',
-    imgFULL: item.imgFULL || currentRow.imgFULL || '',
-    Visible: item.Visible || currentRow.Visible || 'SI',
-    Recibido: item.Recibido || currentRow.Recibido || 'SI',
-    Orden: currentRow.Orden || getNextOrden(headers, rows),
-    Origen: item.Origen || currentRow.Origen || '',
-    Pais: item.Pais || item.Origen || currentRow.Pais || currentRow.Origen || '',
-    País: item.Pais || item.Origen || currentRow['País'] || currentRow.Origen || '',
-    OrigenISO: item.OrigenISO || currentRow.OrigenISO || '',
-    PaisISO: item.PaisISO || item.OrigenISO || currentRow.PaisISO || currentRow.OrigenISO || '',
-    'PaísISO': item.PaisISO || item.OrigenISO || currentRow['PaísISO'] || currentRow.OrigenISO || '',
+    discogs_id: numericDiscogsId ? `r${numericDiscogsId}` : (item.ID || ''),
+    artista: item.Artista || '',
+    disco: item.Disco || '',
+    año: item.Año ? Number(item.Año) : null,
+    genero: item.Genero || '',
+    tipo: item.Tipo || '',
+    formato: item.Formato || '',
+    estilo: item.Estilo || item.Estilos || '',
+    disqueria: item.Disqueria || item.Sello || item.Label || '',
+    catalogo: item.Catalogo || item.Catalog || '',
+    img: item.img || '',
+    img_full: item.imgFULL || '',
+    visible: item.Visible ? item.Visible === 'SI' || item.Visible === true : true,
+    recibido: item.Recibido ? item.Recibido === 'SI' || item.Recibido === true : true,
+    orden: item.Orden || `${(item.Artista || '').toLowerCase()} - ${item.Año || ''}`,
+    origen: item.Origen || item.Pais || item.País || '',
+    origen_iso: item.OrigenISO || item.PaisISO || item.PaísISO || '',
   };
 }
 
-function mapItemToRow(headers, rows, item, existingRow = null) {
-  const valueMap = buildInventoryValueMap(item, headers, rows, existingRow);
-  return headers.map(header => {
-    if (Object.prototype.hasOwnProperty.call(valueMap, header)) {
-      return valueMap[header] ?? '';
-    }
-
-    return existingRow?.[header] ?? '';
-  });
-}
-
-export async function add(item) {
-  ensureInventoryStorageConfigured();
-
-  const { headers, rows } = await getHeadersAndRows();
-  const sheets = await getSheets();
-  const spreadsheetId = getSpreadsheetId();
-  const sheetName = getSheetName();
-  const row = mapItemToRow(headers, rows, item);
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${sheetName}!A:ZZ`,
-    valueInputOption: 'USER_ENTERED',
-    insertDataOption: 'INSERT_ROWS',
-    requestBody: {
-      values: [row],
-    },
-  });
-
+function denormalizeItem(row) {
+  if (!row) return null;
   return {
-    ...item,
-    ID: row[headers.indexOf('ID')] || '',
-    Recibido: row[headers.indexOf('Recibido')] || item.Recibido || 'SI',
-    Visible: row[headers.indexOf('Visible')] || 'SI',
-    Orden: row[headers.indexOf('Orden')] || '',
+    ID: row.discogs_id || '',
+    Artista: row.artista || '',
+    Disco: row.disco || '',
+    Año: row.año ? String(row.año) : '',
+    Genero: row.genero || '',
+    Tipo: row.tipo || '',
+    Formato: row.formato || '',
+    Estilo: row.estilo || '',
+    Disqueria: row.disqueria || '',
+    Catalogo: row.catalogo || '',
+    img: row.img || '',
+    imgFULL: row.img_full || '',
+    Visible: row.visible ? 'SI' : 'NO',
+    Recibido: row.recibido ? 'SI' : 'NO',
+    Orden: row.orden || '',
+    Origen: row.origen || '',
+    OrigenISO: row.origen_iso || '',
   };
 }
 
-export async function update(originalItem, item) {
-  ensureInventoryStorageConfigured();
+export async function getAll(usuario = null) {
+  let query = supabase.from('inventory').select('*');
 
-  const { headers, rows } = await getHeadersAndRows();
-  const rowIndex = findRowIndex(headers, rows, originalItem);
-
-  if (rowIndex === -1) {
-    return null;
+  if (usuario) {
+    query = query.eq('usuario', usuario);
   }
 
-  const existingRow = rowToObject(headers, rows[rowIndex]);
-  const updatedRow = mapItemToRow(headers, rows, item, existingRow);
-  const values = [headers, ...rows];
-  values[rowIndex + 1] = updatedRow;
+  const { data, error } = await query.order('orden');
 
-  const sheets = await getSheets();
-  const spreadsheetId = getSpreadsheetId();
-  const sheetName = getSheetName();
+  if (error) {
+    console.error('Error leyendo inventario:', error.message);
+    return [];
+  }
 
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `${sheetName}!A1:ZZ${values.length}`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: { values },
-  });
-
-  return rowToObject(headers, updatedRow);
+  return (data || []).map(denormalizeItem);
 }
 
-export async function softRemove(originalItem) {
-  return update(originalItem, {
-    Visible: 'NO',
-  });
+export async function getPublic() {
+  const { data, error } = await supabase
+    .from('inventory')
+    .select('*')
+    .eq('visible', true)
+    .order('orden');
+
+  if (error) {
+    console.error('Error leyendo inventario público:', error.message);
+    return [];
+  }
+
+  const items = (data || []).map(denormalizeItem);
+  console.log(`📀 [Supabase] Inventario público: ${items.length} items cargados desde PostgreSQL`);
+  return items;
 }
 
-export async function markReceived(originalItem) {
-  return update(originalItem, {
-    Recibido: 'SI',
-  });
+export async function add(item, usuario) {
+  const normalized = normalizeItem(item);
+
+  const { data, error } = await supabase
+    .from('inventory')
+    .insert({ ...normalized, usuario })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error agregando a inventario:', error.message);
+    throw new Error('Error al guardar en inventario');
+  }
+
+  return denormalizeItem(data);
+}
+
+export async function update(originalItem, item, usuario) {
+  const normalized = normalizeItem(item);
+
+  const { data, error } = await supabase
+    .from('inventory')
+    .update(normalized)
+    .eq('usuario', usuario)
+    .eq('id', originalItem.id || originalItem.ID)
+    .select()
+    .single();
+
+  if (error) {
+    if (error.code === 'PGRST116') return null;
+    console.error('Error actualizando inventario:', error.message);
+    throw new Error('Error al actualizar inventario');
+  }
+
+  return denormalizeItem(data);
+}
+
+export async function softRemove(originalItem, usuario) {
+  const { data, error } = await supabase
+    .from('inventory')
+    .update({ visible: false })
+    .eq('usuario', usuario)
+    .eq('id', originalItem.id || originalItem.ID)
+    .select()
+    .single();
+
+  if (error) {
+    if (error.code === 'PGRST116') return null;
+    console.error('Error ocultando inventario:', error.message);
+    throw new Error('Error al ocultar inventario');
+  }
+
+  return denormalizeItem(data);
+}
+
+export async function markReceived(originalItem, usuario) {
+  const { data, error } = await supabase
+    .from('inventory')
+    .update({ recibido: true })
+    .eq('usuario', usuario)
+    .eq('id', originalItem.id || originalItem.ID)
+    .select()
+    .single();
+
+  if (error) {
+    if (error.code === 'PGRST116') return null;
+    console.error('Error marcando como recibido:', error.message);
+    throw new Error('Error al marcar como recibido');
+  }
+
+  return denormalizeItem(data);
+}
+
+export async function getLastUpdatedAt() {
+  const { data, error } = await supabase
+    .from('inventory')
+    .select('updated_at')
+    .order('updated_at', { ascending: false })
+    .limit(1);
+
+  if (error || !data || data.length === 0) return null;
+  return new Date(data[0].updated_at).getTime();
 }

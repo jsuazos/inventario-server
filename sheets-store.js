@@ -1,206 +1,88 @@
-import { google } from 'googleapis';
-import fs from 'fs';
+import { supabase } from './db.js';
 
-const SPREADSHEET_ID = process.env.PUSH_SHEET_ID;
-const SHEET_NAME = 'PushSubscriptions';
+export async function getAll() {
+  const { data, error } = await supabase
+    .from('push_subscriptions')
+    .select('*')
+    .order('created_at', { ascending: false });
 
-function getCredentials() {
-  if (process.env.GOOGLE_SERVICE_ACCOUNT_FILE) {
-    const raw = fs.readFileSync(process.env.GOOGLE_SERVICE_ACCOUNT_FILE, 'utf-8');
-    return JSON.parse(raw);
+  if (error) {
+    console.error('Error leyendo suscripciones push:', error.message);
+    return [];
   }
-  if (process.env.GOOGLE_SERVICE_ACCOUNT) {
-    return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
-  }
-  throw new Error('GOOGLE_SERVICE_ACCOUNT o GOOGLE_SERVICE_ACCOUNT_FILE no configurados');
-}
 
-function getAuth() {
-  return new google.auth.GoogleAuth({
-    credentials: getCredentials(),
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
-}
-
-let sheetsClient = null;
-let sheetEnsured = false;
-
-async function getSheets() {
-  if (sheetsClient) return sheetsClient;
-  const auth = await getAuth();
-  sheetsClient = google.sheets({ version: 'v4', auth });
-  return sheetsClient;
-}
-
-async function ensureSheet() {
-  if (sheetEnsured) return;
-  try {
-    sheetEnsured = true;
-    const sheets = await getSheets();
-    const meta = await sheets.spreadsheets.get({
-      spreadsheetId: SPREADSHEET_ID,
-    });
-    const exists = (meta.data.sheets || []).some(s => s.properties.title === SHEET_NAME);
-    if (!exists) {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: SPREADSHEET_ID,
-        requestBody: {
-          requests: [{ addSheet: { properties: { title: SHEET_NAME } } }],
-        },
-      });
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `${SHEET_NAME}!A1:D1`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: {
-          values: [['endpoint', 'p256dh', 'auth', 'created_at']],
-        },
-      });
-      console.log(`Sheet "${SHEET_NAME}" creada automáticamente`);
-    }
-  } catch (err) {
-    sheetEnsured = false;
-    console.error('Error asegurando sheet:', err.message);
-  }
-}
-
-async function getRawRows() {
-  const sheets = await getSheets();
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:D`,
-  });
-  return res.data.values || [];
-}
-
-function rowsToSubscriptions(rows) {
-  if (!rows || rows.length < 2) return [];
-  return rows.slice(1).map(row => ({
-    endpoint: row[0] || '',
+  return (data || []).map(row => ({
+    endpoint: row.endpoint,
     keys: {
-      p256dh: row[1] || '',
-      auth: row[2] || '',
+      p256dh: row.p256dh,
+      auth: row.auth,
     },
-    createdAt: row[3] || '',
+    createdAt: row.created_at,
   }));
 }
 
-export async function getAll() {
-  if (!SPREADSHEET_ID) {
-    console.warn('PUSH_SHEET_ID no configurado, usando almacenamiento vacío');
-    return [];
-  }
-
-  await ensureSheet();
-
-  try {
-    const rows = await getRawRows();
-    return rowsToSubscriptions(rows);
-  } catch (err) {
-    console.error('Error leyendo suscripciones de Google Sheets:', err.message);
-    return [];
-  }
-}
-
 export async function add(subscription) {
-  if (!SPREADSHEET_ID) return [];
+  if (!subscription || !subscription.endpoint) return [];
 
-  try {
+  const { data: existing } = await supabase
+    .from('push_subscriptions')
+    .select('endpoint')
+    .eq('endpoint', subscription.endpoint)
+    .maybeSingle();
+
+  if (existing) {
     const subs = await getAll();
-    const exists = subs.some(s => s.endpoint === subscription.endpoint);
-    if (exists) return subs;
+    return subs;
+  }
 
-    const sheets = await getSheets();
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A:D`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [[
-          subscription.endpoint,
-          subscription.keys?.p256dh || '',
-          subscription.keys?.auth || '',
-          new Date().toISOString(),
-        ]],
-      },
+  const { error } = await supabase
+    .from('push_subscriptions')
+    .insert({
+      endpoint: subscription.endpoint,
+      p256dh: subscription.keys?.p256dh || '',
+      auth: subscription.keys?.auth || '',
     });
 
-    console.log(`Push subscription added via Sheets (total: ${subs.length + 1})`);
-    return [...subs, subscription];
-  } catch (err) {
-    console.error('Error agregando suscripción a Google Sheets:', err.message);
+  if (error) {
+    console.error('Error agregando suscripción push:', error.message);
     return await getAll();
   }
+
+  return await getAll();
 }
 
 export async function remove(endpoint) {
-  if (!SPREADSHEET_ID) return [];
+  if (!endpoint) return [];
 
-  try {
-    const subs = await getAll();
-    const filtered = subs.filter(s => s.endpoint !== endpoint);
-    if (filtered.length === subs.length) return subs;
+  const { error } = await supabase
+    .from('push_subscriptions')
+    .delete()
+    .eq('endpoint', endpoint);
 
-    const sheets = await getSheets();
-
-    const values = filtered.map(s => [
-      s.endpoint,
-      s.keys?.p256dh || '',
-      s.keys?.auth || '',
-      s.createdAt || '',
-    ]);
-
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A:D`,
-    });
-
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: `${SHEET_NAME}!A1:D${values.length + 1}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [
-          ['endpoint', 'p256dh', 'auth', 'created_at'],
-          ...values,
-        ],
-      },
-    });
-
-    console.log(`Push subscription removed via Sheets (remaining: ${filtered.length})`);
-    return filtered;
-  } catch (err) {
-    console.error('Error eliminando suscripción de Google Sheets:', err.message);
-    return await getAll();
+  if (error) {
+    console.error('Error eliminando suscripción push:', error.message);
   }
+
+  return await getAll();
 }
 
 export async function diagnose() {
-  if (!SPREADSHEET_ID) {
-    return {
-      ok: false,
-      reason: 'missing-spreadsheet-id',
-    };
-  }
+  const { data, error, count } = await supabase
+    .from('push_subscriptions')
+    .select('*', { count: 'exact', head: false })
+    .limit(1);
 
-  await ensureSheet();
-
-  const sheets = await getSheets();
-  const meta = await sheets.spreadsheets.get({
-    spreadsheetId: SPREADSHEET_ID,
-  });
-  const sheetTitles = (meta.data.sheets || []).map(sheet => sheet.properties.title);
-  const rows = await getRawRows();
+  const allSubs = await getAll();
 
   return {
-    ok: true,
-    spreadsheetId: SPREADSHEET_ID,
-    sheetName: SHEET_NAME,
-    sheetExists: sheetTitles.includes(SHEET_NAME),
-    sheetTitles,
-    rawRowCount: rows.length,
-    header: rows[0] || null,
-    firstDataRow: rows[1] || null,
-    subscriptionsCount: rowsToSubscriptions(rows).length,
+    ok: !error,
+    subscriptionsCount: allSubs.length,
+    rawRowCount: allSubs.length,
+    header: ['endpoint', 'p256dh', 'auth', 'created_at'],
+    firstDataRow: data && data.length > 0 ? {
+      endpoint: data[0].endpoint.substring(0, 50) + '...',
+      hasKeys: !!(data[0].p256dh && data[0].auth),
+    } : null,
+    error: error ? error.message : null,
   };
 }

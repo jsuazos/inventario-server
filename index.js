@@ -35,9 +35,10 @@ const publicInventoryRateMap = new Map();
 
 const REQUIRED_ENV_VARS = [
   'JWT_SECRET',
-  'SECRET_TOKEN_INVENTARIO',
   'VAPID_PUBLIC_KEY',
-  'VAPID_PRIVATE_KEY'
+  'VAPID_PRIVATE_KEY',
+  'SUPABASE_URL',
+  'SUPABASE_SERVICE_KEY',
 ];
 
 for (const envVar of REQUIRED_ENV_VARS) {
@@ -59,10 +60,7 @@ app.get('/api/health', (req, res) => {
 });
 
 function originAllowed(value = '') {
-  if (!value) {
-    return false;
-  }
-
+  if (!value) return false;
   try {
     return ALLOWED_PUBLIC_ORIGINS.includes(new URL(value).origin);
   } catch {
@@ -111,6 +109,8 @@ function authMiddleware(req, res, next) {
   }
 }
 
+// --- Auth ---
+
 app.post('/api/login', async (req, res) => {
   const { usuario, contrasena } = req.body;
 
@@ -121,7 +121,6 @@ app.post('/api/login', async (req, res) => {
   try {
     const usuariosJSON = process.env.USUARIOS_JSON;
     if (!usuariosJSON) {
-      console.error('USUARIOS_JSON no está definido en variables de entorno');
       return res.status(500).json({ error: 'Configuración inválida del servidor' });
     }
 
@@ -155,44 +154,69 @@ app.post('/api/login/verify', authMiddleware, (req, res) => {
   res.json({ valido: true, usuario: req.user.usuario });
 });
 
+// --- Inventario público (todos los usuarios, solo visible) ---
+
 app.get('/api/inventario-public', publicInventarioAccessMiddleware, async (req, res) => {
   try {
-    const forceRefresh = req.query.refresh === '1';
-    const { publicData, fetchedAt } = await getInventarioData({ forceRefresh });
-    res.set('Cache-Control', 'private, max-age=60');
+    const usuario = req.query.usuario || null;
+    const items = await inventoryStore.getAll(usuario);
+    const publicData = items.filter(item => item.Visible === 'SI').map(item => ({
+      ID: item.ID,
+      Artista: item.Artista,
+      Disco: item.Disco,
+      Año: item.Año,
+      Genero: item.Genero,
+      Tipo: item.Tipo,
+      Recibido: item.Recibido,
+      img: item.img,
+      imgFULL: item.imgFULL,
+      Orden: item.Orden,
+      Origen: item.Origen,
+      OrigenISO: item.OrigenISO,
+    }));
+
     res.json({
       data: publicData,
       meta: {
-        cached: !forceRefresh,
-        fetchedAt: new Date(fetchedAt).toISOString(),
+        source: 'supabase',
+        cached: false,
+        fetchedAt: new Date().toISOString(),
         count: publicData.length,
       },
     });
   } catch (error) {
-    console.error('Error al consultar Inventario público:', error);
-    res.status(500).json({ error: 'Error al consultar Inventario público' });
+    console.error('Error al consultar inventario público:', error);
+    res.status(500).json({ error: 'Error al consultar inventario público' });
   }
 });
+
+// --- Inventario privado (usuario autenticado) ---
 
 app.get('/api/inventario', authMiddleware, async (req, res) => {
   try {
-    const forceRefresh = req.query.refresh === '1';
-    const { rawData, fetchedAt } = await getInventarioData({ forceRefresh });
+    const items = await inventoryStore.getAll(req.user.usuario);
+
     res.json({
-      data: rawData,
+      data: items,
       meta: {
-        cached: !forceRefresh,
-        fetchedAt: new Date(fetchedAt).toISOString(),
-        count: rawData.length,
+        cached: false,
+        fetchedAt: new Date().toISOString(),
+        count: items.length,
       },
     });
   } catch (error) {
-    console.error('Error al consultar Inventario privado:', error);
-    res.status(500).json({ error: 'Error al consultar Inventario privado' });
+    console.error('Error al consultar inventario:', error);
+    res.status(500).json({ error: 'Error al consultar inventario' });
   }
 });
 
+// --- Artistas (Google Apps Script proxy - se mantiene) ---
+
 app.get('/api/artistas', async (req, res) => {
+  if (!process.env.SECRET_TOKEN_INVENTARIO) {
+    return res.status(500).json({ error: 'SECRET_TOKEN_INVENTARIO no configurado' });
+  }
+
   const url = `https://script.google.com/macros/s/${process.env.SECRET_TOKEN_INVENTARIO}/exec?path=ARTISTAS&action=read`;
 
   try {
@@ -204,6 +228,8 @@ app.get('/api/artistas', async (req, res) => {
     res.status(500).json({ error: 'Error al consultar Artistas' });
   }
 });
+
+// --- Fanart ---
 
 app.get('/api/fanart', async (req, res) => {
   const artistMbId = req.query.mbid;
@@ -220,6 +246,8 @@ app.get('/api/fanart', async (req, res) => {
     res.status(500).json({ error: 'Error al consultar Fanart.tv' });
   }
 });
+
+// --- Discogs ---
 
 app.get('/api/discogs', async (req, res) => {
   const query = req.query.q;
@@ -253,6 +281,8 @@ app.get('/api/discogs/release/:id', async (req, res) => {
   }
 });
 
+// --- CRUD Inventario (requieren auth, multi-usuario) ---
+
 app.post('/api/inventario', authMiddleware, async (req, res) => {
   try {
     const item = req.body || {};
@@ -260,7 +290,7 @@ app.post('/api/inventario', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Datos de inventario inválidos' });
     }
 
-    const saved = await inventoryStore.add(item);
+    const saved = await inventoryStore.add(item, req.user.usuario);
     invalidateInventarioCache();
     res.json({ ok: true, item: saved });
   } catch (error) {
@@ -276,7 +306,7 @@ app.put('/api/inventario', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Datos de edición de inventario inválidos' });
     }
 
-    const updated = await inventoryStore.update(originalItem, item);
+    const updated = await inventoryStore.update(originalItem, item, req.user.usuario);
     if (!updated) {
       return res.status(404).json({ error: 'Elemento de inventario no encontrado' });
     }
@@ -296,7 +326,7 @@ app.patch('/api/inventario/recibido', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Falta el item original de inventario' });
     }
 
-    const updated = await inventoryStore.markReceived(originalItem);
+    const updated = await inventoryStore.markReceived(originalItem, req.user.usuario);
     if (!updated) {
       return res.status(404).json({ error: 'Elemento de inventario no encontrado' });
     }
@@ -316,7 +346,7 @@ app.delete('/api/inventario', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Falta el item original de inventario' });
     }
 
-    const removed = await inventoryStore.softRemove(originalItem);
+    const removed = await inventoryStore.softRemove(originalItem, req.user.usuario);
     if (!removed) {
       return res.status(404).json({ error: 'Elemento de inventario no encontrado' });
     }
@@ -328,6 +358,8 @@ app.delete('/api/inventario', authMiddleware, async (req, res) => {
     res.status(500).json({ error: 'Error ocultando inventario' });
   }
 });
+
+// --- Wishlist ---
 
 app.get('/api/wishlist-users', async (req, res) => {
   try {
@@ -472,9 +504,8 @@ app.get('/api/push/subscriptions', authMiddleware, async (req, res) => {
 app.get('/api/push/check-sheet', async (req, res) => {
   const result = {
     config: {
-      pushSheetId: !!process.env.PUSH_SHEET_ID,
-      googleServiceAccount: !!process.env.GOOGLE_SERVICE_ACCOUNT,
-      googleServiceAccountFile: !!process.env.GOOGLE_SERVICE_ACCOUNT_FILE,
+      supabaseUrl: !!process.env.SUPABASE_URL,
+      supabaseServiceKey: !!process.env.SUPABASE_SERVICE_KEY,
     },
     sheetStatus: 'unknown',
     subscriptions: 0,
@@ -482,12 +513,8 @@ app.get('/api/push/check-sheet', async (req, res) => {
     error: null,
   };
 
-  if (!process.env.PUSH_SHEET_ID) {
-    result.sheetStatus = 'missing PUSH_SHEET_ID';
-    return res.json(result);
-  }
-  if (!process.env.GOOGLE_SERVICE_ACCOUNT) {
-    result.sheetStatus = 'missing GOOGLE_SERVICE_ACCOUNT';
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
+    result.sheetStatus = 'missing Supabase config';
     return res.json(result);
   }
 

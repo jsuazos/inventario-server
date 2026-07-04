@@ -8,6 +8,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import * as pushStore from './sheets-store.js';
 import * as wishlistStore from './wishlist-store.js';
+import { supabase } from './db.js';
 import * as inventoryStore from './inventory-store.js';
 import { getInventarioData, invalidateInventarioCache } from './inventory-service.js';
 import { createPayload, sendPushBroadcast } from './push-notification-service.js';
@@ -111,6 +112,24 @@ function authMiddleware(req, res, next) {
 
 // --- Auth ---
 
+async function findUser(usuario) {
+  const { data, error } = await supabase
+    .from('users')
+    .select('usuario, hash')
+    .eq('usuario', usuario)
+    .maybeSingle();
+
+  if (data) return data;
+
+  const usuariosJSON = process.env.USUARIOS_JSON;
+  if (usuariosJSON) {
+    const usuarios = JSON.parse(usuariosJSON);
+    return usuarios.find(u => u.usuario === usuario) || null;
+  }
+
+  return null;
+}
+
 app.post('/api/login', async (req, res) => {
   const { usuario, contrasena } = req.body;
 
@@ -119,13 +138,7 @@ app.post('/api/login', async (req, res) => {
   }
 
   try {
-    const usuariosJSON = process.env.USUARIOS_JSON;
-    if (!usuariosJSON) {
-      return res.status(500).json({ error: 'Configuración inválida del servidor' });
-    }
-
-    const usuarios = JSON.parse(usuariosJSON);
-    const user = usuarios.find(u => u.usuario === usuario);
+    const user = await findUser(usuario);
 
     if (!user || !user.hash) {
       return res.status(401).json({ error: 'Usuario o contraseña inválidos' });
@@ -152,6 +165,57 @@ app.post('/api/login', async (req, res) => {
 
 app.post('/api/login/verify', authMiddleware, (req, res) => {
   res.json({ valido: true, usuario: req.user.usuario });
+});
+
+app.post('/api/register', async (req, res) => {
+  const { usuario, contrasena } = req.body;
+
+  if (!usuario || !contrasena) {
+    return res.status(400).json({ error: 'Faltan campos' });
+  }
+
+  if (usuario.length < 3) {
+    return res.status(400).json({ error: 'El usuario debe tener al menos 3 caracteres' });
+  }
+
+  if (contrasena.length < 4) {
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 4 caracteres' });
+  }
+
+  if (!/^[a-zA-Z0-9_]+$/.test(usuario)) {
+    return res.status(400).json({ error: 'El usuario solo puede contener letras, números y guión bajo' });
+  }
+
+  try {
+    const existing = await findUser(usuario);
+    if (existing) {
+      return res.status(409).json({ error: 'El usuario ya existe' });
+    }
+
+    const hash = await bcrypt.hash(contrasena, 10);
+
+    const { error } = await supabase.from('users').insert({
+      usuario,
+      hash,
+    });
+
+    if (error) {
+      console.error('Error al crear usuario en Supabase:', error.message);
+      return res.status(500).json({ error: 'Error al crear usuario' });
+    }
+
+    const token = jwt.sign(
+      { usuario },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.status(201).json({ token, usuario });
+
+  } catch (error) {
+    console.error('Error al registrar:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
 });
 
 // --- Inventario público (todos los usuarios, solo visible) ---

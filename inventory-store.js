@@ -1,5 +1,18 @@
 import { supabase } from './db.js';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function resolveInventoryId(originalItem, usuario) {
+  if (originalItem.id && UUID_RE.test(originalItem.id)) return originalItem.id;
+  const { data } = await supabase
+    .from('inventory')
+    .select('id')
+    .eq('usuario', usuario)
+    .eq('discogs_id', originalItem.ID || '')
+    .maybeSingle();
+  return data?.id || null;
+}
+
 function normalizeItem(item = {}) {
   const numericDiscogsId = String(item.discogsId || item.ID || '').replace(/\D+/g, '');
   return {
@@ -26,6 +39,7 @@ function normalizeItem(item = {}) {
 function denormalizeItem(row) {
   if (!row) return null;
   return {
+    id: row.id,
     ID: row.discogs_id || '',
     Artista: row.artista || '',
     Disco: row.disco || '',
@@ -63,23 +77,6 @@ export async function getAll(usuario = null) {
   return (data || []).map(denormalizeItem);
 }
 
-export async function getPublic() {
-  const { data, error } = await supabase
-    .from('inventory')
-    .select('*')
-    .eq('visible', true)
-    .order('orden');
-
-  if (error) {
-    console.error('Error leyendo inventario público:', error.message);
-    return [];
-  }
-
-  const items = (data || []).map(denormalizeItem);
-  console.log(`📀 [Supabase] Inventario público: ${items.length} items cargados desde PostgreSQL`);
-  return items;
-}
-
 export async function add(item, usuario) {
   const normalized = normalizeItem(item);
 
@@ -99,12 +96,13 @@ export async function add(item, usuario) {
 
 export async function update(originalItem, item, usuario) {
   const normalized = normalizeItem(item);
+  const id = await resolveInventoryId(originalItem, usuario);
+  if (!id) return null;
 
   const { data, error } = await supabase
     .from('inventory')
     .update(normalized)
-    .eq('usuario', usuario)
-    .eq('id', originalItem.id || originalItem.ID)
+    .eq('id', id)
     .select()
     .single();
 
@@ -118,11 +116,13 @@ export async function update(originalItem, item, usuario) {
 }
 
 export async function softRemove(originalItem, usuario) {
+  const id = await resolveInventoryId(originalItem, usuario);
+  if (!id) return null;
+
   const { data, error } = await supabase
     .from('inventory')
     .update({ visible: false })
-    .eq('usuario', usuario)
-    .eq('id', originalItem.id || originalItem.ID)
+    .eq('id', id)
     .select()
     .single();
 
@@ -136,11 +136,13 @@ export async function softRemove(originalItem, usuario) {
 }
 
 export async function markReceived(originalItem, usuario) {
+  const id = await resolveInventoryId(originalItem, usuario);
+  if (!id) return null;
+
   const { data, error } = await supabase
     .from('inventory')
     .update({ recibido: true })
-    .eq('usuario', usuario)
-    .eq('id', originalItem.id || originalItem.ID)
+    .eq('id', id)
     .select()
     .single();
 

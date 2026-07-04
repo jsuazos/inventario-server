@@ -26,3 +26,6 @@ dist-ssr
 .env
 library-snapshot.json
 push-subscriptions.json
+
+# JWT de sesión generado — equivalente a una contraseña. Cualquiera que lo tenga puede actuar como jsuazo.
+token.txt 

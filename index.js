@@ -24,15 +24,7 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const PUBLIC_INVENTARIO_RATE_LIMIT = parseInt(process.env.PUBLIC_INVENTARIO_RATE_LIMIT || '60', 10);
-const PUBLIC_INVENTARIO_RATE_WINDOW_MS = parseInt(process.env.PUBLIC_INVENTARIO_RATE_WINDOW_MS || '60000', 10);
-const ALLOWED_PUBLIC_ORIGINS = (process.env.ALLOWED_PUBLIC_ORIGINS || [
-  'https://jsuazos.github.io',
-  'http://localhost:5173',
-  'http://127.0.0.1:5173'
-].join(',')).split(',').map(origin => origin.trim()).filter(Boolean);
 
-const publicInventoryRateMap = new Map();
 
 const REQUIRED_ENV_VARS = [
   'JWT_SECRET',
@@ -59,40 +51,6 @@ webpush.setVapidDetails(
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'inventario-server', timestamp: new Date().toISOString() });
 });
-
-function originAllowed(value = '') {
-  if (!value) return false;
-  try {
-    return ALLOWED_PUBLIC_ORIGINS.includes(new URL(value).origin);
-  } catch {
-    return false;
-  }
-}
-
-function publicInventarioAccessMiddleware(req, res, next) {
-  const origin = req.get('origin') || '';
-  const referer = req.get('referer') || '';
-
-  if (!originAllowed(origin) && !originAllowed(referer)) {
-    return res.status(403).json({ error: 'Acceso no permitido' });
-  }
-
-  const ip = req.ip || req.connection?.remoteAddress || 'unknown';
-  const now = Date.now();
-  const current = publicInventoryRateMap.get(ip);
-
-  if (!current || now - current.startedAt > PUBLIC_INVENTARIO_RATE_WINDOW_MS) {
-    publicInventoryRateMap.set(ip, { count: 1, startedAt: now });
-    return next();
-  }
-
-  if (current.count >= PUBLIC_INVENTARIO_RATE_LIMIT) {
-    return res.status(429).json({ error: 'Demasiadas solicitudes' });
-  }
-
-  current.count += 1;
-  next();
-}
 
 function authMiddleware(req, res, next) {
   const header = req.headers.authorization;
@@ -218,43 +176,7 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// --- Inventario público (todos los usuarios, solo visible) ---
-
-app.get('/api/inventario-public', publicInventarioAccessMiddleware, async (req, res) => {
-  try {
-    const usuario = req.query.usuario || null;
-    const items = await inventoryStore.getAll(usuario);
-    const publicData = items.filter(item => item.Visible === 'SI').map(item => ({
-      ID: item.ID,
-      Artista: item.Artista,
-      Disco: item.Disco,
-      Año: item.Año,
-      Genero: item.Genero,
-      Tipo: item.Tipo,
-      Recibido: item.Recibido,
-      img: item.img,
-      imgFULL: item.imgFULL,
-      Orden: item.Orden,
-      Origen: item.Origen,
-      OrigenISO: item.OrigenISO,
-    }));
-
-    res.json({
-      data: publicData,
-      meta: {
-        source: 'supabase',
-        cached: false,
-        fetchedAt: new Date().toISOString(),
-        count: publicData.length,
-      },
-    });
-  } catch (error) {
-    console.error('Error al consultar inventario público:', error);
-    res.status(500).json({ error: 'Error al consultar inventario público' });
-  }
-});
-
-// --- Inventario privado (usuario autenticado) ---
+// --- Inventario (solo autenticado, multi-usuario) ---
 
 app.get('/api/inventario', authMiddleware, async (req, res) => {
   try {
@@ -372,7 +294,7 @@ app.put('/api/inventario', authMiddleware, async (req, res) => {
 
     const updated = await inventoryStore.update(originalItem, item, req.user.usuario);
     if (!updated) {
-      return res.status(404).json({ error: 'Elemento de inventario no encontrado' });
+      return res.status(403).json({ error: 'No puedes editar un disco que no te pertenece' });
     }
 
     invalidateInventarioCache();
@@ -392,7 +314,7 @@ app.patch('/api/inventario/recibido', authMiddleware, async (req, res) => {
 
     const updated = await inventoryStore.markReceived(originalItem, req.user.usuario);
     if (!updated) {
-      return res.status(404).json({ error: 'Elemento de inventario no encontrado' });
+      return res.status(403).json({ error: 'No puedes modificar un disco que no te pertenece' });
     }
 
     invalidateInventarioCache();
@@ -412,7 +334,7 @@ app.delete('/api/inventario', authMiddleware, async (req, res) => {
 
     const removed = await inventoryStore.softRemove(originalItem, req.user.usuario);
     if (!removed) {
-      return res.status(404).json({ error: 'Elemento de inventario no encontrado' });
+      return res.status(403).json({ error: 'No puedes eliminar un disco que no te pertenece' });
     }
 
     invalidateInventarioCache();
@@ -423,17 +345,7 @@ app.delete('/api/inventario', authMiddleware, async (req, res) => {
   }
 });
 
-// --- Wishlist ---
-
-app.get('/api/wishlist-users', async (req, res) => {
-  try {
-    const users = await wishlistStore.getUsers();
-    res.json({ users });
-  } catch (error) {
-    console.error('Error al consultar usuarios con wishlist:', error);
-    res.status(500).json({ error: 'Error al consultar usuarios con wishlist' });
-  }
-});
+// --- Wishlist (solo autenticado, propia) ---
 
 app.get('/api/wishlist/me', authMiddleware, async (req, res) => {
   try {
@@ -442,16 +354,6 @@ app.get('/api/wishlist/me', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error al consultar wishlist propia:', error);
     res.status(500).json({ error: 'Error al consultar wishlist propia' });
-  }
-});
-
-app.get('/api/wishlist/:usuario', async (req, res) => {
-  try {
-    const items = await wishlistStore.getByUser(req.params.usuario);
-    res.json({ usuario: req.params.usuario, items });
-  } catch (error) {
-    console.error('Error al consultar wishlist pública:', error);
-    res.status(500).json({ error: 'Error al consultar wishlist pública' });
   }
 });
 
@@ -479,7 +381,7 @@ app.put('/api/wishlist/:rowId', authMiddleware, async (req, res) => {
 
     const updated = await wishlistStore.update(req.user.usuario, req.params.rowId, item);
     if (!updated) {
-      return res.status(404).json({ error: 'Elemento de wishlist no encontrado' });
+      return res.status(403).json({ error: 'No puedes editar un elemento de wishlist que no te pertenece' });
     }
 
     res.json({ ok: true, item: updated });
@@ -492,7 +394,10 @@ app.put('/api/wishlist/:rowId', authMiddleware, async (req, res) => {
 app.delete('/api/wishlist/:rowId', authMiddleware, async (req, res) => {
   try {
     const removed = await wishlistStore.remove(req.user.usuario, req.params.rowId);
-    res.json({ ok: removed });
+    if (!removed) {
+      return res.status(403).json({ error: 'No puedes eliminar un elemento de wishlist que no te pertenece' });
+    }
+    res.json({ ok: true });
   } catch (error) {
     console.error('Error quitando de wishlist:', error);
     res.status(500).json({ error: 'Error quitando de wishlist' });

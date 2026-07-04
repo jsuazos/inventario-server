@@ -83,20 +83,6 @@ export async function getByUser(usuario) {
   return (data || []).map(denormalizeWishlistItem);
 }
 
-export async function getUsers() {
-  const { data, error } = await supabase
-    .from('wishlist')
-    .select('usuario', { distinct: true })
-    .order('usuario');
-
-  if (error) {
-    console.error('Error consultando usuarios de wishlist:', error.message);
-    return [];
-  }
-
-  return (data || []).map(row => row.usuario);
-}
-
 export async function add(usuario, item) {
   const wishlistKey = buildWishlistKey(item);
 

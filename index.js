@@ -110,7 +110,7 @@ app.post('/api/login', async (req, res) => {
     const token = jwt.sign(
       { usuario: user.usuario },
       JWT_SECRET,
-      { expiresIn: '24h' }
+      { expiresIn: '365d' }
     );
 
     res.json({ token, usuario: user.usuario });
@@ -165,7 +165,7 @@ app.post('/api/register', async (req, res) => {
     const token = jwt.sign(
       { usuario },
       JWT_SECRET,
-      { expiresIn: '24h' }
+      { expiresIn: '365d' }
     );
 
     res.status(201).json({ token, usuario });

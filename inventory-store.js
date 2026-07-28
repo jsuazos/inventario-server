@@ -57,6 +57,7 @@ function denormalizeItem(row) {
     Orden: row.orden || '',
     Origen: row.origen || '',
     OrigenISO: row.origen_iso || '',
+    createdAt: row.created_at || '',
   };
 }
 

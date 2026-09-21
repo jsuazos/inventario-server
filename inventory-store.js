@@ -62,7 +62,10 @@ function denormalizeItem(row) {
 }
 
 export async function getAll(usuario = null) {
-  let query = supabase.from('inventory').select('*');
+  let query = supabase
+    .from('inventory')
+    .select('*')
+    .eq('visible', true);
 
   if (usuario) {
     query = query.eq('usuario', usuario);

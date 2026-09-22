@@ -236,6 +236,16 @@ app.get('/api/inventario', authMiddleware, async (req, res) => {
   }
 });
 
+app.get('/api/inventario/ocultos', authMiddleware, async (req, res) => {
+  try {
+    const items = await inventoryStore.getHidden(req.user.usuario);
+    res.json({ data: items, meta: { count: items.length } });
+  } catch (error) {
+    console.error('Error al consultar inventario oculto:', error);
+    res.status(500).json({ error: 'Error al consultar inventario oculto' });
+  }
+});
+
 // --- Artistas (Google Apps Script proxy - se mantiene) ---
 
 app.get('/api/artistas', async (req, res) => {
@@ -378,6 +388,25 @@ app.delete('/api/inventario', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error ocultando inventario:', error);
     res.status(500).json({ error: 'Error ocultando inventario' });
+  }
+});
+
+app.patch('/api/inventario/restaurar', authMiddleware, async (req, res) => {
+  try {
+    const { originalItem } = req.body || {};
+    if (!originalItem) {
+      return res.status(400).json({ error: 'Falta el item original de inventario' });
+    }
+
+    const restored = await inventoryStore.restore(originalItem, req.user.usuario);
+    if (!restored) {
+      return res.status(403).json({ error: 'No puedes restaurar un disco que no te pertenece' });
+    }
+
+    res.json({ ok: true, item: restored });
+  } catch (error) {
+    console.error('Error restaurando inventario:', error);
+    res.status(500).json({ error: 'Error al restaurar inventario' });
   }
 });
 

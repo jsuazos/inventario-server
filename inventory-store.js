@@ -86,6 +86,22 @@ export async function getAll(usuario = null) {
   return (data || []).map(denormalizeItem);
 }
 
+export async function getHidden(usuario) {
+  const { data, error } = await supabase
+    .from('inventory')
+    .select('*')
+    .eq('usuario', usuario)
+    .eq('visible', false)
+    .order('orden');
+
+  if (error) {
+    console.error('Error leyendo inventario oculto:', error.message);
+    throw new Error('Error al consultar inventario oculto');
+  }
+
+  return (data || []).map(denormalizeItem);
+}
+
 export async function add(item, usuario) {
   const normalized = normalizeItem(item);
 
@@ -141,6 +157,27 @@ export async function softRemove(originalItem, usuario) {
     if (error.code === 'PGRST116') return null;
     console.error('Error ocultando inventario:', error.message);
     throw new Error('Error al ocultar inventario');
+  }
+
+  return denormalizeItem(data);
+}
+
+export async function restore(originalItem, usuario) {
+  const id = await resolveInventoryId(originalItem, usuario);
+  if (!id) return null;
+
+  const { data, error } = await supabase
+    .from('inventory')
+    .update({ visible: true })
+    .eq('id', id)
+    .eq('usuario', usuario)
+    .select()
+    .single();
+
+  if (error) {
+    if (error.code === 'PGRST116') return null;
+    console.error('Error restaurando inventario:', error.message);
+    throw new Error('Error al restaurar inventario');
   }
 
   return denormalizeItem(data);

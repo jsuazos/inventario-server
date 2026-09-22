@@ -58,10 +58,12 @@ Authorization: Bearer <token>
 | `POST` | `/api/login/verify` | Sí | Verifica una sesión. |
 | `POST` | `/api/register` | No | Registra una cuenta. |
 | `GET` | `/api/inventario` | Sí | Devuelve los discos visibles del usuario. |
+| `GET` | `/api/inventario/ocultos` | Sí | Devuelve los discos ocultos del usuario. |
 | `POST` | `/api/inventario` | Sí | Crea un disco; requiere `Artista` y `Disco`. |
 | `PUT` | `/api/inventario` | Sí | Edita `{ originalItem, item }`. |
 | `PATCH` | `/api/inventario/recibido` | Sí | Marca `{ originalItem }` como recibido. |
 | `DELETE` | `/api/inventario` | Sí | Oculta `{ originalItem }`. |
+| `PATCH` | `/api/inventario/restaurar` | Sí | Restaura `{ originalItem }` al inventario visible. |
 | `GET` | `/api/wishlist/me` | Sí | Devuelve la wishlist del usuario. |
 | `POST` | `/api/wishlist` | Sí | Añade un item de wishlist. |
 | `PUT` | `/api/wishlist/:rowId` | Sí | Edita un item de wishlist. |

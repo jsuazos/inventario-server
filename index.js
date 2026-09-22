@@ -20,10 +20,31 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
-
 const PORT = process.env.PORT || 3000;
+const DEFAULT_ALLOWED_ORIGINS = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'https://jsuazos.github.io',
+];
+const allowedOrigins = new Set(
+  (process.env.ALLOWED_PUBLIC_ORIGINS || DEFAULT_ALLOWED_ORIGINS.join(','))
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean)
+);
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.has(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(null, false);
+  },
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+app.use(express.json());
 
 
 const REQUIRED_ENV_VARS = [
@@ -410,7 +431,7 @@ app.get('/api/push/vapid-public-key', (req, res) => {
   res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
 });
 
-app.post('/api/push/subscribe', async (req, res) => {
+app.post('/api/push/subscribe', authMiddleware, async (req, res) => {
   const { subscription } = req.body;
   if (!subscription || !subscription.endpoint) {
     return res.status(400).json({ error: 'Suscripción inválida' });
@@ -419,7 +440,7 @@ app.post('/api/push/subscribe', async (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete('/api/push/subscribe', async (req, res) => {
+app.delete('/api/push/subscribe', authMiddleware, async (req, res) => {
   const { endpoint } = req.body;
   if (!endpoint) {
     return res.status(400).json({ error: 'Falta endpoint' });
@@ -431,7 +452,7 @@ app.delete('/api/push/subscribe', async (req, res) => {
 let lastNotifyTime = 0;
 const NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
 
-app.post('/api/push/notify', async (req, res) => {
+app.post('/api/push/notify', authMiddleware, async (req, res) => {
   const { title, body, data } = req.body;
   const now = Date.now();
   if (now - lastNotifyTime < NOTIFY_COOLDOWN_MS) {
@@ -470,7 +491,7 @@ app.get('/api/push/subscriptions', authMiddleware, async (req, res) => {
   res.json({ count: subs.length, subscriptions: subs });
 });
 
-app.get('/api/push/check-sheet', async (req, res) => {
+app.get('/api/push/check-sheet', authMiddleware, async (req, res) => {
   const result = {
     config: {
       supabaseUrl: !!process.env.SUPABASE_URL,

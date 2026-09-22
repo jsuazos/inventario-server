@@ -97,7 +97,7 @@ async function migrateInventory(usuario) {
 
   const normalized = items.map(item => normalizeInventoryItem(item, usuario));
 
-  const { data, error } = await supabase.from('inventory').upsert(normalized, {
+  const { error } = await supabase.from('inventory').upsert(normalized, {
     onConflict: 'id',
     ignoreDuplicates: false,
   });
@@ -151,7 +151,7 @@ async function migrateWishlist() {
     };
   }).filter(item => item.usuario && item.wishlist_key);
 
-  const { data, error } = await supabase.from('wishlist').upsert(normalized, {
+  const { error } = await supabase.from('wishlist').upsert(normalized, {
     onConflict: 'usuario, wishlist_key',
     ignoreDuplicates: false,
   });
@@ -194,7 +194,7 @@ async function migratePushSubscriptions() {
     auth: row.auth || '',
   })).filter(item => item.endpoint && item.p256dh && item.auth);
 
-  const { data, error } = await supabase.from('push_subscriptions').upsert(normalized, {
+  const { error } = await supabase.from('push_subscriptions').upsert(normalized, {
     onConflict: 'endpoint',
     ignoreDuplicates: false,
   });

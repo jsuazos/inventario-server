@@ -10,7 +10,7 @@ import * as pushStore from './sheets-store.js';
 import * as wishlistStore from './wishlist-store.js';
 import { supabase } from './db.js';
 import * as inventoryStore from './inventory-store.js';
-import { getInventarioData, invalidateInventarioCache } from './inventory-service.js';
+import { invalidateInventarioCache } from './inventory-service.js';
 import { createPayload, sendPushBroadcast } from './push-notification-service.js';
 import { start as startBackgroundCheck } from './background-check.js';
 import { createRateLimiter } from './rate-limit.js';
@@ -102,7 +102,7 @@ function authMiddleware(req, res, next) {
     const decoded = jwt.verify(token, JWT_SECRET);
     req.user = decoded;
     next();
-  } catch (error) {
+  } catch {
     return res.status(401).json({ error: 'Token inválido o expirado' });
   }
 }
@@ -110,7 +110,7 @@ function authMiddleware(req, res, next) {
 // --- Auth ---
 
 async function findUser(usuario) {
-  const { data, error } = await supabase
+  const { data } = await supabase
     .from('users')
     .select('usuario, hash')
     .eq('usuario', usuario)

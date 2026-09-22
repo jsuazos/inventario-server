@@ -67,7 +67,7 @@ export async function remove(endpoint) {
 }
 
 export async function diagnose() {
-  const { data, error, count } = await supabase
+  const { data, error } = await supabase
     .from('push_subscriptions')
     .select('*', { count: 'exact', head: false })
     .limit(1);

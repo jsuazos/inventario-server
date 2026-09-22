@@ -13,6 +13,7 @@ import * as inventoryStore from './inventory-store.js';
 import { getInventarioData, invalidateInventarioCache } from './inventory-service.js';
 import { createPayload, sendPushBroadcast } from './push-notification-service.js';
 import { start as startBackgroundCheck } from './background-check.js';
+import { createRateLimiter } from './rate-limit.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -62,6 +63,23 @@ for (const envVar of REQUIRED_ENV_VARS) {
 }
 
 const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
+const loginIpRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  maxAttempts: 20,
+  keyGenerator: req => `login-ip:${req.ip}`,
+});
+const loginAccountRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  maxAttempts: 5,
+  keyGenerator: req => `login-account:${req.ip}:${String(req.body?.usuario || '').trim().toLowerCase()}`,
+  resetOnSuccess: true,
+});
+const registerRateLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  maxAttempts: 5,
+  keyGenerator: req => `register-ip:${req.ip}`,
+});
 
 webpush.setVapidDetails(
   'mailto:push@inventario-musica.app',
@@ -109,8 +127,9 @@ async function findUser(usuario) {
   return null;
 }
 
-app.post('/api/login', async (req, res) => {
-  const { usuario, contrasena } = req.body;
+app.post('/api/login', loginIpRateLimiter, loginAccountRateLimiter, async (req, res) => {
+  const usuario = typeof req.body?.usuario === 'string' ? req.body.usuario.trim() : '';
+  const contrasena = typeof req.body?.contrasena === 'string' ? req.body.contrasena : '';
 
   if (!usuario || !contrasena) {
     return res.status(400).json({ error: 'Faltan campos' });
@@ -131,7 +150,7 @@ app.post('/api/login', async (req, res) => {
     const token = jwt.sign(
       { usuario: user.usuario },
       JWT_SECRET,
-      { expiresIn: '365d' }
+      { expiresIn: JWT_EXPIRES_IN }
     );
 
     res.json({ token, usuario: user.usuario });
@@ -146,19 +165,20 @@ app.post('/api/login/verify', authMiddleware, (req, res) => {
   res.json({ valido: true, usuario: req.user.usuario });
 });
 
-app.post('/api/register', async (req, res) => {
-  const { usuario, contrasena } = req.body;
+app.post('/api/register', registerRateLimiter, async (req, res) => {
+  const usuario = typeof req.body?.usuario === 'string' ? req.body.usuario.trim() : '';
+  const contrasena = typeof req.body?.contrasena === 'string' ? req.body.contrasena : '';
 
   if (!usuario || !contrasena) {
     return res.status(400).json({ error: 'Faltan campos' });
   }
 
-  if (usuario.length < 3) {
-    return res.status(400).json({ error: 'El usuario debe tener al menos 3 caracteres' });
+  if (usuario.length < 3 || usuario.length > 32) {
+    return res.status(400).json({ error: 'El usuario debe tener entre 3 y 32 caracteres' });
   }
 
-  if (contrasena.length < 4) {
-    return res.status(400).json({ error: 'La contraseña debe tener al menos 4 caracteres' });
+  if (contrasena.length < 10 || contrasena.length > 128) {
+    return res.status(400).json({ error: 'La contraseña debe tener entre 10 y 128 caracteres' });
   }
 
   if (!/^[a-zA-Z0-9_]+$/.test(usuario)) {
@@ -186,7 +206,7 @@ app.post('/api/register', async (req, res) => {
     const token = jwt.sign(
       { usuario },
       JWT_SECRET,
-      { expiresIn: '365d' }
+      { expiresIn: JWT_EXPIRES_IN }
     );
 
     res.status(201).json({ token, usuario });

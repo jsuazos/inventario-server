@@ -41,6 +41,28 @@ function normalizeItem(item = {}) {
   };
 }
 
+function normalizeComparisonValue(value) {
+  return String(value || '').trim().toLocaleLowerCase('es');
+}
+
+function hasDiscogsId(item) {
+  return String(item.discogs_id || '').trim() !== '';
+}
+
+function matchesDuplicateIdentity(row, item) {
+  const sameFormat = normalizeComparisonValue(row.formato) === normalizeComparisonValue(item.formato);
+
+  if (hasDiscogsId(item)) {
+    return sameFormat && String(row.discogs_id || '') === item.discogs_id;
+  }
+
+  return sameFormat &&
+    !hasDiscogsId(row) &&
+    normalizeComparisonValue(row.artista) === normalizeComparisonValue(item.artista) &&
+    normalizeComparisonValue(row.disco) === normalizeComparisonValue(item.disco) &&
+    Number(row.año || 0) === Number(item.año || 0);
+}
+
 function denormalizeItem(row) {
   if (!row) return null;
   return {
@@ -105,6 +127,22 @@ export async function getHidden(usuario) {
 export async function add(item, usuario) {
   const normalized = normalizeItem(item);
 
+  const { data: existingRows, error: existingError } = await supabase
+    .from('inventory')
+    .select('id, discogs_id, artista, disco, año, formato')
+    .eq('usuario', usuario);
+
+  if (existingError) {
+    console.error('Error verificando duplicados de inventario:', existingError.message);
+    throw new Error('Error al verificar duplicados de inventario');
+  }
+
+  if ((existingRows || []).some(row => matchesDuplicateIdentity(row, normalized))) {
+    const error = new Error('Ya tienes este disco registrado con el mismo formato');
+    error.code = 'INVENTORY_DUPLICATE';
+    throw error;
+  }
+
   const { data, error } = await supabase
     .from('inventory')
     .insert({ ...normalized, usuario })
@@ -112,6 +150,11 @@ export async function add(item, usuario) {
     .single();
 
   if (error) {
+    if (error.code === '23505') {
+      const duplicateError = new Error('Ya tienes este disco registrado con el mismo formato');
+      duplicateError.code = 'INVENTORY_DUPLICATE';
+      throw duplicateError;
+    }
     console.error('Error agregando a inventario:', error.message);
     throw new Error('Error al guardar en inventario');
   }

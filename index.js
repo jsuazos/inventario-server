@@ -329,6 +329,9 @@ app.post('/api/inventario', authMiddleware, async (req, res) => {
     const saved = await inventoryStore.add(item, req.user.usuario);
     res.json({ ok: true, item: saved });
   } catch (error) {
+    if (error.code === 'INVENTORY_DUPLICATE') {
+      return res.status(409).json({ error: error.message });
+    }
     console.error('Error agregando a inventario:', error);
     res.status(500).json({ error: 'Error agregando a inventario' });
   }

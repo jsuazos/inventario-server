@@ -83,6 +83,8 @@ Authorization: Bearer <token>
 
 El inventario usa las propiedades de interfaz `Artista`, `Disco`, `Año`, `Genero`, `Tipo`, `Formato`, `Recibido`, `Visible` e imágenes. En la base de datos se normalizan a columnas en minúsculas. Las rutas de edición, ocultamiento y recepción verifican que el registro pertenezca al usuario autenticado.
 
+No se puede crear un duplicado para el mismo usuario y formato. Se identifica por ID de Discogs cuando existe; sin ese ID, por artista, disco y año normalizados. El mismo lanzamiento con otro formato sí se permite. Para una base existente, revisa y ejecuta primero [la migración de protección contra duplicados](./migrations/20260922_inventory_duplicate_protection.sql): no borra duplicados automáticamente.
+
 ## Operación
 
 - El frontend se configura mediante `config.json` y apunta a la ruta base `/api`.

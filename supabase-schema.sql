@@ -42,6 +42,21 @@ CREATE INDEX IF NOT EXISTS idx_inventory_visible ON inventory (visible);
 CREATE INDEX IF NOT EXISTS idx_inventory_genero  ON inventory (genero);
 CREATE INDEX IF NOT EXISTS idx_inventory_orden   ON inventory (orden);
 
+-- Evita duplicados por usuario. Se permite el mismo lanzamiento con otro formato.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_unique_discogs_format
+  ON inventory (usuario, discogs_id, lower(btrim(COALESCE(formato, ''))))
+  WHERE NULLIF(btrim(discogs_id), '') IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_unique_manual_format
+  ON inventory (
+    usuario,
+    lower(btrim(artista)),
+    lower(btrim(disco)),
+    COALESCE(año, -1),
+    lower(btrim(COALESCE(formato, '')))
+  )
+  WHERE NULLIF(btrim(discogs_id), '') IS NULL;
+
 -- 3. WISHLIST (multi-usuario)
 CREATE TABLE IF NOT EXISTS wishlist (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),

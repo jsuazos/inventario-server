@@ -10,7 +10,6 @@ import * as pushStore from './sheets-store.js';
 import * as wishlistStore from './wishlist-store.js';
 import { supabase } from './db.js';
 import * as inventoryStore from './inventory-store.js';
-import { invalidateInventarioCache } from './inventory-service.js';
 import { createPayload, sendPushBroadcast } from './push-notification-service.js';
 import { start as startBackgroundCheck } from './background-check.js';
 import { createRateLimiter } from './rate-limit.js';
@@ -318,7 +317,6 @@ app.post('/api/inventario', authMiddleware, async (req, res) => {
     }
 
     const saved = await inventoryStore.add(item, req.user.usuario);
-    invalidateInventarioCache();
     res.json({ ok: true, item: saved });
   } catch (error) {
     console.error('Error agregando a inventario:', error);
@@ -338,7 +336,6 @@ app.put('/api/inventario', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'No puedes editar un disco que no te pertenece' });
     }
 
-    invalidateInventarioCache();
     res.json({ ok: true, item: updated });
   } catch (error) {
     console.error('Error editando inventario:', error);
@@ -358,7 +355,6 @@ app.patch('/api/inventario/recibido', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'No puedes modificar un disco que no te pertenece' });
     }
 
-    invalidateInventarioCache();
     res.json({ ok: true, item: updated });
   } catch (error) {
     console.error('Error marcando inventario como recibido:', error);
@@ -378,7 +374,6 @@ app.delete('/api/inventario', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'No puedes eliminar un disco que no te pertenece' });
     }
 
-    invalidateInventarioCache();
     res.json({ ok: true, item: removed });
   } catch (error) {
     console.error('Error ocultando inventario:', error);

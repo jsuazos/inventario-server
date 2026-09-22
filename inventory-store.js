@@ -3,13 +3,18 @@ import { supabase } from './db.js';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 async function resolveInventoryId(originalItem, usuario) {
-  if (originalItem.id && UUID_RE.test(originalItem.id)) return originalItem.id;
-  const { data } = await supabase
+  let query = supabase
     .from('inventory')
     .select('id')
-    .eq('usuario', usuario)
-    .eq('discogs_id', originalItem.ID || '')
-    .maybeSingle();
+    .eq('usuario', usuario);
+
+  if (originalItem.id && UUID_RE.test(originalItem.id)) {
+    query = query.eq('id', originalItem.id);
+  } else {
+    query = query.eq('discogs_id', originalItem.ID || '');
+  }
+
+  const { data } = await query.maybeSingle();
   return data?.id || null;
 }
 
@@ -107,6 +112,7 @@ export async function update(originalItem, item, usuario) {
     .from('inventory')
     .update(normalized)
     .eq('id', id)
+    .eq('usuario', usuario)
     .select()
     .single();
 
@@ -127,6 +133,7 @@ export async function softRemove(originalItem, usuario) {
     .from('inventory')
     .update({ visible: false })
     .eq('id', id)
+    .eq('usuario', usuario)
     .select()
     .single();
 
@@ -147,6 +154,7 @@ export async function markReceived(originalItem, usuario) {
     .from('inventory')
     .update({ recibido: true })
     .eq('id', id)
+    .eq('usuario', usuario)
     .select()
     .single();
 

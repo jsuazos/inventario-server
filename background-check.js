@@ -2,6 +2,7 @@ import { supabase } from './db.js';
 import * as inventoryStore from './inventory-store.js';
 import * as pushStore from './sheets-store.js';
 import { createPayload, sendPushBroadcast } from './push-notification-service.js';
+import { shouldNotifyForInventoryChange } from './change-detector.js';
 
 let lastNotifyTime = 0;
 const NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
@@ -18,12 +19,16 @@ async function getLastKnownChange() {
 }
 
 async function setLastKnownChange(timestamp) {
-  await supabase
+  const { error } = await supabase
     .from('sync_metadata')
     .upsert(
       { key: 'last_known_change', value: String(timestamp), updated_at: new Date().toISOString() },
       { onConflict: 'key' }
     );
+
+  if (error) {
+    throw new Error(`No se pudo guardar el estado de sincronización: ${error.message}`);
+  }
 }
 
 async function detectChanges() {
@@ -32,10 +37,10 @@ async function detectChanges() {
 
   if (!latestTimestamp) return false;
 
-  if (lastKnown && Number(lastKnown) >= latestTimestamp) return false;
+  const shouldNotify = shouldNotifyForInventoryChange(lastKnown, latestTimestamp);
 
   await setLastKnownChange(latestTimestamp);
-  return !lastKnown;
+  return shouldNotify;
 }
 
 async function broadcastPush() {

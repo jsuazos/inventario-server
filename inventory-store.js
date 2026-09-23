@@ -257,3 +257,18 @@ export async function getLastUpdatedAt() {
   if (error || !data || data.length === 0) return null;
   return new Date(data[0].updated_at).getTime();
 }
+
+export async function getChangedUsersSince(timestamp) {
+  const since = new Date(Number(timestamp)).toISOString();
+  const { data, error } = await supabase
+    .from('inventory')
+    .select('usuario')
+    .gt('updated_at', since);
+
+  if (error) {
+    console.error('Error buscando usuarios con cambios:', error.message);
+    throw new Error('Error al consultar cambios de inventario');
+  }
+
+  return [...new Set((data || []).map(row => row.usuario).filter(Boolean))];
+}

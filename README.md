@@ -34,6 +34,7 @@ npm run lint
 | `JWT_SECRET` | Secreto para firmar y verificar sesiones. |
 | `JWT_EXPIRES_IN` | Duración de nuevos JWT; por defecto `30d`. |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | Credenciales de Web Push. |
+| `ADMIN_USERS` | Usuarios administradores separados por coma; habilita diagnóstico y broadcast push. |
 | `ALLOWED_PUBLIC_ORIGINS` | Orígenes CORS separados por coma. |
 | `SECRET_TOKEN_INVENTARIO` | Identificador del Apps Script para el catálogo de artistas. |
 | `DISCOGS_TOKEN`, `FANART_API_KEY` | Credenciales de proveedores externos. |
@@ -75,9 +76,9 @@ Authorization: Bearer <token>
 | `GET` | `/api/push/vapid-public-key` | No | Clave pública necesaria para Web Push. |
 | `POST` | `/api/push/subscribe` | Sí | Guarda una suscripción push. |
 | `DELETE` | `/api/push/subscribe` | Sí | Elimina una suscripción por `endpoint`. |
-| `POST` | `/api/push/notify` | Sí | Envía un broadcast sujeto a cooldown. |
-| `GET` | `/api/push/subscriptions` | Sí | Diagnóstico de suscripciones. |
-| `GET` | `/api/push/check-sheet` | Sí | Diagnóstico de almacenamiento push. |
+| `POST` | `/api/push/notify` | Admin | Envía un broadcast sujeto a cooldown. |
+| `GET` | `/api/push/subscriptions` | Admin | Devuelve solo el total de suscripciones. |
+| `GET` | `/api/push/check-sheet` | Admin | Diagnóstico de almacenamiento push. |
 
 ## Datos principales
 
@@ -88,5 +89,6 @@ No se puede crear un duplicado para el mismo usuario y formato. Se identifica po
 ## Operación
 
 - El frontend se configura mediante `config.json` y apunta a la ruta base `/api`.
-- El chequeo en segundo plano inicia junto al servidor y notifica cambios en inventario mediante Web Push.
+- El chequeo en segundo plano inicia junto al servidor y notifica cambios en inventario mediante Web Push, solo a los dispositivos del usuario que tuvo cambios.
+- Para una base existente, ejecuta [la migración de propiedad de suscripciones push](./migrations/20260923_push_subscription_ownership.sql). Los dispositivos ya registrados deben volver a iniciar sesión para asociarse a su usuario.
 - Revisa el esquema SQL antes de desplegar cambios de base de datos.

@@ -79,6 +79,12 @@ const registerRateLimiter = createRateLimiter({
   maxAttempts: 5,
   keyGenerator: req => `register-ip:${req.ip}`,
 });
+const adminUsers = new Set(
+  (process.env.ADMIN_USERS || '')
+    .split(',')
+    .map(usuario => usuario.trim())
+    .filter(Boolean)
+);
 
 webpush.setVapidDetails(
   'mailto:push@inventario-musica.app',
@@ -104,6 +110,14 @@ function authMiddleware(req, res, next) {
   } catch {
     return res.status(401).json({ error: 'Token inválido o expirado' });
   }
+}
+
+function adminMiddleware(req, res, next) {
+  if (!adminUsers.has(req.user?.usuario)) {
+    return res.status(403).json({ error: 'Se requieren permisos de administrador' });
+  }
+
+  next();
 }
 
 // --- Auth ---
@@ -483,8 +497,13 @@ app.post('/api/push/subscribe', authMiddleware, async (req, res) => {
   if (!subscription || !subscription.endpoint) {
     return res.status(400).json({ error: 'Suscripción inválida' });
   }
-  await pushStore.add(subscription);
-  res.json({ ok: true });
+  try {
+    await pushStore.add(subscription, req.user.usuario);
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Error guardando suscripción push:', error);
+    res.status(500).json({ error: 'Error al guardar suscripción push' });
+  }
 });
 
 app.delete('/api/push/subscribe', authMiddleware, async (req, res) => {
@@ -492,14 +511,22 @@ app.delete('/api/push/subscribe', authMiddleware, async (req, res) => {
   if (!endpoint) {
     return res.status(400).json({ error: 'Falta endpoint' });
   }
-  await pushStore.remove(endpoint);
-  res.json({ ok: true });
+  try {
+    const removed = await pushStore.remove(endpoint, req.user.usuario);
+    if (!removed) {
+      return res.status(404).json({ error: 'Suscripción no encontrada' });
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Error eliminando suscripción push:', error);
+    res.status(500).json({ error: 'Error al eliminar suscripción push' });
+  }
 });
 
 let lastNotifyTime = 0;
 const NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
 
-app.post('/api/push/notify', authMiddleware, async (req, res) => {
+app.post('/api/push/notify', authMiddleware, adminMiddleware, async (req, res) => {
   const { title, body, data } = req.body;
   const now = Date.now();
   if (now - lastNotifyTime < NOTIFY_COOLDOWN_MS) {
@@ -516,7 +543,7 @@ app.post('/api/push/notify', authMiddleware, async (req, res) => {
   const broadcast = await sendPushBroadcast(
     subscriptions,
     payload,
-    endpoint => pushStore.remove(endpoint)
+    endpoint => pushStore.removeAny(endpoint)
   );
 
   if (broadcast.sent > 0) {
@@ -533,12 +560,12 @@ app.post('/api/push/notify', authMiddleware, async (req, res) => {
   res.json({ ok: true, sent: broadcast.sent, failed: broadcast.failed });
 });
 
-app.get('/api/push/subscriptions', authMiddleware, async (req, res) => {
+app.get('/api/push/subscriptions', authMiddleware, adminMiddleware, async (req, res) => {
   const subs = await pushStore.getAll();
-  res.json({ count: subs.length, subscriptions: subs });
+  res.json({ count: subs.length });
 });
 
-app.get('/api/push/check-sheet', authMiddleware, async (req, res) => {
+app.get('/api/push/check-sheet', authMiddleware, adminMiddleware, async (req, res) => {
   const result = {
     config: {
       supabaseUrl: !!process.env.SUPABASE_URL,

@@ -4,7 +4,7 @@ import * as pushStore from './sheets-store.js';
 import { createPayload, sendPushBroadcast } from './push-notification-service.js';
 import { shouldNotifyForInventoryChange } from './change-detector.js';
 
-let lastNotifyTime = 0;
+const lastNotifyTimesByUser = new Map();
 const NOTIFY_COOLDOWN_MS = 5 * 60 * 1000;
 
 async function getLastKnownChange() {
@@ -35,16 +35,20 @@ async function detectChanges() {
   const lastKnown = await getLastKnownChange();
   const latestTimestamp = await inventoryStore.getLastUpdatedAt();
 
-  if (!latestTimestamp) return false;
+  if (!latestTimestamp) return [];
 
   const shouldNotify = shouldNotifyForInventoryChange(lastKnown, latestTimestamp);
+  const changedUsers = shouldNotify
+    ? await inventoryStore.getChangedUsersSince(lastKnown)
+    : [];
 
   await setLastKnownChange(latestTimestamp);
-  return shouldNotify;
+  return changedUsers;
 }
 
-async function broadcastPush() {
+async function broadcastPush(usuario) {
   const now = Date.now();
+  const lastNotifyTime = lastNotifyTimesByUser.get(usuario) || 0;
   if (now - lastNotifyTime < NOTIFY_COOLDOWN_MS) return;
 
   const payload = createPayload({
@@ -53,35 +57,35 @@ async function broadcastPush() {
     data: { url: './' },
   });
 
-  const subscriptions = await pushStore.getAll();
+  const subscriptions = await pushStore.getByUser(usuario);
   if (subscriptions.length === 0) return;
 
   const broadcast = await sendPushBroadcast(
     subscriptions,
     payload,
-    endpoint => pushStore.remove(endpoint)
+    endpoint => pushStore.remove(endpoint, usuario)
   );
 
   if (broadcast.sent > 0) {
-    lastNotifyTime = now;
+    lastNotifyTimesByUser.set(usuario, now);
   }
 
   broadcast.results
     .filter(result => !result.ok)
     .forEach(result => {
-      console.error(`Background check push error to ${result.endpoint}:`, result.error);
+      console.error('Background check push error:', result.error);
     });
 
-  console.log(`Background check: cambios detectados, push enviado a ${broadcast.sent}/${subscriptions.length} dispositivos (${broadcast.failed} fallidos)`);
+  console.log(`Background check: push enviado a ${broadcast.sent}/${subscriptions.length} dispositivos para ${usuario} (${broadcast.failed} fallidos)`);
 }
 
 async function checkForChanges() {
   try {
-    const hasChanges = await detectChanges();
-    if (!hasChanges) return;
+    const changedUsers = await detectChanges();
+    if (changedUsers.length === 0) return;
 
-    console.log('Background check: cambios detectados en la base de datos');
-    await broadcastPush();
+    console.log(`Background check: cambios detectados para ${changedUsers.length} usuario(s)`);
+    await Promise.all(changedUsers.map(usuario => broadcastPush(usuario)));
   } catch (err) {
     console.error('Background check: error:', err.message);
   }

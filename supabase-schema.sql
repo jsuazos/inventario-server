@@ -85,11 +85,14 @@ CREATE INDEX IF NOT EXISTS idx_wishlist_usuario ON wishlist (usuario);
 -- 4. PUSH SUBSCRIPTIONS
 CREATE TABLE IF NOT EXISTS push_subscriptions (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  usuario       TEXT NOT NULL REFERENCES users(usuario) ON DELETE CASCADE,
   endpoint      TEXT NOT NULL UNIQUE,
   p256dh        TEXT NOT NULL,
   auth          TEXT NOT NULL,
   created_at    TIMESTAMPTZ DEFAULT now()
 );
+
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_usuario ON push_subscriptions (usuario);
 
 -- 5. SYNC METADATA (para background-check)
 CREATE TABLE IF NOT EXISTS sync_metadata (

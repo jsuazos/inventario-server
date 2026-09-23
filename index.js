@@ -13,6 +13,7 @@ import * as inventoryStore from './inventory-store.js';
 import { createPayload, sendPushBroadcast } from './push-notification-service.js';
 import { start as startBackgroundCheck } from './background-check.js';
 import { createRateLimiter } from './rate-limit.js';
+import { ExpiringCache, ExternalServiceError, fetchJsonWithTimeout } from './external-service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -79,12 +80,21 @@ const registerRateLimiter = createRateLimiter({
   maxAttempts: 5,
   keyGenerator: req => `register-ip:${req.ip}`,
 });
+const externalApiRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  maxAttempts: 60,
+  keyGenerator: req => `external-api:${req.ip}`,
+});
 const adminUsers = new Set(
   (process.env.ADMIN_USERS || '')
     .split(',')
     .map(usuario => usuario.trim())
     .filter(Boolean)
 );
+const artistsCache = new ExpiringCache({ ttlMs: 30 * 60 * 1000 });
+const fanartCache = new ExpiringCache({ ttlMs: 6 * 60 * 60 * 1000 });
+const discogsSearchCache = new ExpiringCache({ ttlMs: 5 * 60 * 1000 });
+const discogsReleaseCache = new ExpiringCache({ ttlMs: 24 * 60 * 60 * 1000 });
 
 webpush.setVapidDetails(
   'mailto:push@inventario-musica.app',
@@ -262,7 +272,31 @@ app.get('/api/inventario/ocultos', authMiddleware, async (req, res) => {
 
 // --- Artistas (Google Apps Script proxy - se mantiene) ---
 
-app.get('/api/artistas', async (req, res) => {
+function getQueryString(value, { minLength = 1, maxLength = 120 } = {}) {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (normalized.length < minLength || normalized.length > maxLength) {
+    return null;
+  }
+  return normalized;
+}
+
+function sendExternalServiceError(res, error) {
+  if (error instanceof ExternalServiceError) {
+    return res.status(error.status).json({ error: error.message });
+  }
+
+  console.error('Error inesperado en proxy externo:', error);
+  return res.status(502).json({ error: 'Error al consultar el servicio externo' });
+}
+
+async function respondFromCache(res, cache, key, loader, maxAgeSeconds) {
+  const { data, cached } = await cache.getOrLoad(key, loader);
+  res.set('Cache-Control', `public, max-age=${maxAgeSeconds}`);
+  res.set('X-Cache', cached ? 'HIT' : 'MISS');
+  res.json(data);
+}
+
+app.get('/api/artistas', externalApiRateLimiter, async (req, res) => {
   if (!process.env.SECRET_TOKEN_INVENTARIO) {
     return res.status(500).json({ error: 'SECRET_TOKEN_INVENTARIO no configurado' });
   }
@@ -270,64 +304,82 @@ app.get('/api/artistas', async (req, res) => {
   const url = `https://script.google.com/macros/s/${process.env.SECRET_TOKEN_INVENTARIO}/exec?path=ARTISTAS&action=read`;
 
   try {
-    const response = await fetch(url);
-    const data = await response.json();
-    res.json(data);
+    await respondFromCache(
+      res,
+      artistsCache,
+      'artists',
+      () => fetchJsonWithTimeout(url),
+      1800
+    );
   } catch (error) {
-    console.error('Error al consultar Artistas:', error);
-    res.status(500).json({ error: 'Error al consultar Artistas' });
+    console.error('Error al consultar Artistas:', error.message);
+    sendExternalServiceError(res, error);
   }
 });
 
 // --- Fanart ---
 
-app.get('/api/fanart', async (req, res) => {
-  const artistMbId = req.query.mbid;
-  if (!artistMbId) return res.status(400).json({ error: 'Falta el parámetro mbid' });
+app.get('/api/fanart', externalApiRateLimiter, async (req, res) => {
+  const artistMbId = getQueryString(req.query.mbid, { minLength: 36, maxLength: 36 });
+  if (!artistMbId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(artistMbId)) {
+    return res.status(400).json({ error: 'El parámetro mbid no es válido' });
+  }
 
   const url = `https://webservice.fanart.tv/v3/music/${artistMbId}?api_key=${process.env.FANART_API_KEY}`;
 
   try {
-    const response = await fetch(url);
-    const data = await response.json();
-    res.json(data);
+    await respondFromCache(
+      res,
+      fanartCache,
+      `fanart:${artistMbId.toLowerCase()}`,
+      () => fetchJsonWithTimeout(url),
+      21600
+    );
   } catch (error) {
-    console.error('Error al consultar Fanart.tv:', error);
-    res.status(500).json({ error: 'Error al consultar Fanart.tv' });
+    console.error('Error al consultar Fanart.tv:', error.message);
+    sendExternalServiceError(res, error);
   }
 });
 
 // --- Discogs ---
 
-app.get('/api/discogs', async (req, res) => {
-  const query = req.query.q;
-  if (!query) return res.status(400).json({ error: 'Falta el parámetro q' });
+app.get('/api/discogs', externalApiRateLimiter, async (req, res) => {
+  const query = getQueryString(req.query.q, { minLength: 2, maxLength: 120 });
+  if (!query) return res.status(400).json({ error: 'El parámetro q debe tener entre 2 y 120 caracteres' });
 
   const url = `https://api.discogs.com/database/search?q=${encodeURIComponent(query)}&type=release&token=${process.env.DISCOGS_TOKEN}`;
 
   try {
-    const response = await fetch(url);
-    const data = await response.json();
-    res.json(data);
+    await respondFromCache(
+      res,
+      discogsSearchCache,
+      `discogs:search:${query.toLocaleLowerCase('es')}`,
+      () => fetchJsonWithTimeout(url),
+      300
+    );
   } catch (error) {
-    console.error('Error en Discogs:', error);
-    res.status(500).json({ error: 'Error al consultar Discogs' });
+    console.error('Error en Discogs:', error.message);
+    sendExternalServiceError(res, error);
   }
 });
 
-app.get('/api/discogs/release/:id', async (req, res) => {
-  const releaseId = String(req.params.id || '').replace(/^[^0-9]+/, '').trim();
-  if (!releaseId) return res.status(400).json({ error: 'Falta un ID de release válido' });
+app.get('/api/discogs/release/:id', externalApiRateLimiter, async (req, res) => {
+  const releaseId = getQueryString(req.params.id, { minLength: 1, maxLength: 12 });
+  if (!releaseId || !/^\d+$/.test(releaseId)) return res.status(400).json({ error: 'Falta un ID de release válido' });
 
   const url = `https://api.discogs.com/releases/${encodeURIComponent(releaseId)}?token=${process.env.DISCOGS_TOKEN}`;
 
   try {
-    const response = await fetch(url);
-    const data = await response.json();
-    res.json(data);
+    await respondFromCache(
+      res,
+      discogsReleaseCache,
+      `discogs:release:${releaseId}`,
+      () => fetchJsonWithTimeout(url),
+      86400
+    );
   } catch (error) {
-    console.error('Error en Discogs release:', error);
-    res.status(500).json({ error: 'Error al consultar release en Discogs' });
+    console.error('Error en Discogs release:', error.message);
+    sendExternalServiceError(res, error);
   }
 });
 

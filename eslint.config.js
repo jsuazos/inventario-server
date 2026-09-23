@@ -9,6 +9,7 @@ export default [
       sourceType: 'module',
       globals: {
         URL: 'readonly',
+        AbortSignal: 'readonly',
         clearInterval: 'readonly',
         clearTimeout: 'readonly',
         console: 'readonly',

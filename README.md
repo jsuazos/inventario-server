@@ -91,4 +91,5 @@ No se puede crear un duplicado para el mismo usuario y formato. Se identifica po
 - El frontend se configura mediante `config.json` y apunta a la ruta base `/api`.
 - El chequeo en segundo plano inicia junto al servidor y notifica cambios en inventario mediante Web Push, solo a los dispositivos del usuario que tuvo cambios.
 - Para una base existente, ejecuta [la migración de propiedad de suscripciones push](./migrations/20260923_push_subscription_ownership.sql). Los dispositivos ya registrados deben volver a iniciar sesión para asociarse a su usuario.
+- Los proxies de Artistas, Fanart y Discogs tienen timeout de 8 segundos, caché temporal y un límite compartido de 60 solicitudes por IP cada 15 minutos. Las respuestas incluyen `X-Cache: HIT` o `MISS` para diagnóstico.
 - Revisa el esquema SQL antes de desplegar cambios de base de datos.

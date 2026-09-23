@@ -33,6 +33,8 @@ npm run lint
 | `SUPABASE_SERVICE_KEY` | Service role key usada únicamente por el servidor. |
 | `JWT_SECRET` | Secreto para firmar y verificar sesiones. |
 | `JWT_EXPIRES_IN` | Duración de nuevos JWT; por defecto `30d`. |
+| `SESSION_COOKIE_SECURE` | `true` en HTTPS; usa `false` solo para desarrollo local HTTP. |
+| `SESSION_COOKIE_MAX_AGE_MS` | Duración de la cookie de sesión; por defecto 30 días. |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | Credenciales de Web Push. |
 | `ADMIN_USERS` | Usuarios administradores separados por coma; habilita diagnóstico y broadcast push. |
 | `ALLOWED_PUBLIC_ORIGINS` | Orígenes CORS separados por coma. |
@@ -42,13 +44,9 @@ npm run lint
 
 ## Autenticación
 
-Las rutas protegidas requieren:
+Las aplicaciones web autenticadas usan una cookie de sesión `HttpOnly`; por eso deben enviar las solicitudes con credenciales incluidas. La cookie es `Secure` y `SameSite=None` en HTTPS, y `SameSite=Lax` al configurar `SESSION_COOKIE_SECURE=false` para desarrollo local. Las mutaciones desde un origen web no autorizado se rechazan. El encabezado `Authorization: Bearer <token>` se mantiene temporalmente para clientes no web.
 
-```http
-Authorization: Bearer <token>
-```
-
-`POST /api/login` y `POST /api/register` responden con `{ token, usuario }`. Los nuevos registros requieren un usuario de 3 a 32 caracteres y contraseña de 10 a 128 caracteres. Login y registro tienen límites de intentos en memoria.
+`POST /api/login` y `POST /api/register` responden con `{ usuario }` y guardan la sesión en una cookie `HttpOnly`. Los nuevos registros requieren un usuario de 3 a 32 caracteres y contraseña de 10 a 128 caracteres. Login y registro tienen límites de intentos en memoria.
 
 ## Endpoints
 
@@ -56,7 +54,8 @@ Authorization: Bearer <token>
 | --- | --- | :---: | --- |
 | `GET` | `/api/health` | No | Estado del servicio. |
 | `POST` | `/api/login` | No | Inicia sesión con `usuario` y `contrasena`. |
-| `POST` | `/api/login/verify` | Sí | Verifica una sesión. |
+| `POST` | `/api/login/verify` | No | Verifica una sesión; responde `{ valido: false }` si no existe o expiró. |
+| `POST` | `/api/logout` | No | Elimina la cookie de sesión actual. |
 | `POST` | `/api/register` | No | Registra una cuenta. |
 | `GET` | `/api/inventario` | Sí | Devuelve los discos visibles del usuario. |
 | `GET` | `/api/inventario/ocultos` | Sí | Devuelve los discos ocultos del usuario. |

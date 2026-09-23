@@ -14,6 +14,7 @@ import { createPayload, sendPushBroadcast } from './push-notification-service.js
 import { start as startBackgroundCheck } from './background-check.js';
 import { createRateLimiter } from './rate-limit.js';
 import { ExpiringCache, ExternalServiceError, fetchJsonWithTimeout } from './external-service.js';
+import { getCookieValue, getSessionCookieOptions, SESSION_COOKIE_NAME } from './session-cookie.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -44,8 +45,19 @@ app.use(cors({
   },
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
 }));
 app.use(express.json());
+
+const UNSAFE_HTTP_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (UNSAFE_HTTP_METHODS.has(req.method) && origin && !allowedOrigins.has(origin)) {
+    return res.status(403).json({ error: 'Origen no permitido.' });
+  }
+
+  return next();
+});
 
 
 const REQUIRED_ENV_VARS = [
@@ -64,6 +76,16 @@ for (const envVar of REQUIRED_ENV_VARS) {
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '30d';
+const SESSION_COOKIE_SECURE = process.env.SESSION_COOKIE_SECURE !== 'false';
+const DEFAULT_SESSION_COOKIE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const configuredSessionCookieMaxAgeMs = Number(process.env.SESSION_COOKIE_MAX_AGE_MS);
+const SESSION_COOKIE_MAX_AGE_MS = Number.isFinite(configuredSessionCookieMaxAgeMs) && configuredSessionCookieMaxAgeMs > 0
+  ? configuredSessionCookieMaxAgeMs
+  : DEFAULT_SESSION_COOKIE_MAX_AGE_MS;
+const sessionCookieOptions = getSessionCookieOptions({
+  secure: SESSION_COOKIE_SECURE,
+  maxAgeMs: SESSION_COOKIE_MAX_AGE_MS,
+});
 const loginIpRateLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
   maxAttempts: 20,
@@ -106,14 +128,22 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, service: 'inventario-server', timestamp: new Date().toISOString() });
 });
 
+function getRequestToken(req) {
+  const headerToken = req.headers.authorization?.startsWith('Bearer ')
+    ? req.headers.authorization.slice('Bearer '.length)
+    : null;
+  const cookieToken = getCookieValue(req.headers.cookie, SESSION_COOKIE_NAME);
+  return cookieToken || headerToken;
+}
+
 function authMiddleware(req, res, next) {
-  const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
+  const token = getRequestToken(req);
+
+  if (!token) {
     return res.status(401).json({ error: 'Token requerido' });
   }
 
   try {
-    const token = header.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
     req.user = decoded;
     next();
@@ -176,7 +206,8 @@ app.post('/api/login', loginIpRateLimiter, loginAccountRateLimiter, async (req, 
       { expiresIn: JWT_EXPIRES_IN }
     );
 
-    res.json({ token, usuario: user.usuario });
+    res.cookie(SESSION_COOKIE_NAME, token, sessionCookieOptions);
+    res.json({ usuario: user.usuario });
 
   } catch (error) {
     console.error('Error al procesar login:', error);
@@ -184,8 +215,28 @@ app.post('/api/login', loginIpRateLimiter, loginAccountRateLimiter, async (req, 
   }
 });
 
-app.post('/api/login/verify', authMiddleware, (req, res) => {
-  res.json({ valido: true, usuario: req.user.usuario });
+app.post('/api/login/verify', (req, res) => {
+  const token = getRequestToken(req);
+  if (!token) {
+    return res.json({ valido: false });
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    return res.json({ valido: true, usuario: decoded.usuario });
+  } catch {
+    return res.json({ valido: false });
+  }
+});
+
+app.post('/api/logout', (req, res) => {
+  res.clearCookie(SESSION_COOKIE_NAME, {
+    httpOnly: true,
+    secure: SESSION_COOKIE_SECURE,
+    sameSite: SESSION_COOKIE_SECURE ? 'none' : 'lax',
+    path: '/',
+  });
+  res.json({ ok: true });
 });
 
 app.post('/api/register', registerRateLimiter, async (req, res) => {
@@ -232,7 +283,8 @@ app.post('/api/register', registerRateLimiter, async (req, res) => {
       { expiresIn: JWT_EXPIRES_IN }
     );
 
-    res.status(201).json({ token, usuario });
+    res.cookie(SESSION_COOKIE_NAME, token, sessionCookieOptions);
+    res.status(201).json({ usuario });
 
   } catch (error) {
     console.error('Error al registrar:', error);
